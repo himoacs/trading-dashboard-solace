@@ -1,0 +1,88 @@
+---
+# Simple loopback flow
+# Solace -> Pass Through -> Solace
+# Make sure to have all the ${} environment variables set
+log:
+  stdout_log_level: DEBUG
+  log_file_level: DEBUG
+  log_file: solace_ai_connector.log
+
+shared_config:
+  - broker_config: &broker_connection
+      broker_url: ${SOLACE_BROKER_URL}
+      broker_username: ${SOLACE_BROKER_USERNAME}
+      broker_password: ${SOLACE_BROKER_PASSWORD}
+      broker_vpn: ${SOLACE_BROKER_VPN}
+
+
+# Take from input broker and publish back to Solace
+flows:
+  # broker input processing
+  - name: Simple template to LLM
+    components:
+      # Input from a Solace broker
+      - component_name: solace_sw_broker
+        component_module: broker_input
+        component_config:
+          <<: *broker_connection
+          broker_queue_name: twitter_feed
+          broker_subscriptions:
+            - topic: twitter-feed/>
+              qos: 1
+          payload_encoding: utf-8
+          payload_format: json
+
+      #
+      # Do an LLM request
+      #
+      - component_name: llm_request
+        component_module: litellm_chat_model
+        component_config:
+          llm_mode: none
+          timeout: 10 # in second
+          load_balancer:
+            - model_name: "gpt-4o" # model alias
+              litellm_params:
+                    model: openai/claude-3-7-sonnet
+                    api_key: ${LLM_API_KEY}
+                    api_base: https://lite-llm.mymaas.net/
+                    temperature: 0.01
+        input_transforms:
+          - type: copy
+            source_expression: |
+              template:Analyze the message to determine whether based on the sentiment of the message, the company's stock 
+              should be traded or not. The output should be a well formatted json with the same 
+              message ({{text://input.payload:content}}) as the input but with one additional json key "Signal" and its value 
+              should be the signal from one of the three options: Buy, Sell, or Hold. If the message is positive for the company's 
+              growth, then signal should be Buy. If the message is negative for the company's growth, then the signal 
+              should be Sell. If the message is not deterministic and there is doubt, then the signal should be Hold.
+
+              For example if input is a JSON:
+              {"symbol":"MSFT","companyName":"Microsoft Corp.","content":"Microsoft Corp.'s quarterly earnings exceed analyst expectations. Revenue growth accelerating. #MSFT $MSFT","timestamp":"2025-04-19T13:55:29.105Z"}
+              Then the output should be JSON like this and make sure it doesn't have any escape characters and is not a nested json. Do not add any other commentary around this JSON:
+              {"symbol":"MSFT","companyName":"Microsoft Corp.","content":"Microsoft Corp.'s quarterly earnings exceed analyst expectations. Revenue growth accelerating. #MSFT $MSFT","timestamp":"2025-04-19T13:55:29.105Z","signal":"Buy"}
+              
+            dest_expression: user_data.llm_input:messages.0.content
+          - type: copy
+            source_expression: static:user
+            dest_expression: user_data.llm_input:messages.0.role
+        input_selection:
+          source_expression: user_data.llm_input
+
+      # Send response back to broker
+      - component_name: send_response
+        component_module: broker_output
+        component_config:
+          <<: *broker_connection
+          payload_encoding: utf-8
+          payload_format: json
+          copy_user_properties: true
+        input_transforms:
+          - type: copy
+            source_expression: previous
+            dest_expression: user_data.output:payload
+          - type: copy
+            source_expression: template:signal/{{text://input.payload:symbol}}
+            dest_expression: user_data.output:topic
+        input_selection:
+          source_expression: user_data.output 

@@ -1,0 +1,23 @@
+services:
+  trading_dashboard:
+    build: .
+    ports:
+      # Maps host port 5173 to container port 5000, where the app server runs.
+      - "5173:5000"
+    # To provide your secrets, you can use an environment file.
+    # Create a file named .env in the same directory as this docker-compose.yaml
+    # and add your secrets to it like this:
+    # SOLACE_BROKER_URL=tcp://your-broker-url:55555
+    # SOLACE_BROKER_USERNAME=your-username
+    # SOLACE_BROKER_PASSWORD=your-password
+    # SOLACE_BROKER_VPN=your-vpn
+    # LLM_API_KEY=your-llm-api-key
+    env_file:
+      - .env
+    # Alternatively, you can define the environment variables directly:
+    # environment:
+    #   - SOLACE_BROKER_URL=tcp://your-broker-url:55555
+    #   - SOLACE_BROKER_USERNAME=your-username
+    #   - SOLACE_BROKER_PASSWORD=your-password
+    #   - SOLACE_BROKER_VPN=your-vpn
+    #   - LLM_API_KEY=your-llm-api-key 
