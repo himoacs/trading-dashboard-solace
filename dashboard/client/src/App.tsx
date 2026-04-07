@@ -11,6 +11,7 @@ import SubscriptionTestRunner from "./tests/run-subscription-tests";
 import WildcardSubscriptionTest from "./tests/wildcard-subscription-test";
 import { useEffect, useState } from "react";
 import { useSolaceConnection } from "./hooks/useSolaceConnection";
+import { TrafficGeneratorProvider } from "./contexts/TrafficGeneratorContext";
 
 function SolaceConnectionManager() {
   const { toast } = useToast();
@@ -122,10 +123,12 @@ function App() {
   
   return (
     <QueryClientProvider client={queryClient}>
-      <SolaceConnectionManager />
-      <ThemeToggle className="fixed bottom-12 right-4 z-50" />
-      <Router />
-      <Toaster />
+      <TrafficGeneratorProvider>
+        <SolaceConnectionManager />
+        <ThemeToggle className="fixed bottom-12 right-4 z-50" />
+        <Router />
+        <Toaster />
+      </TrafficGeneratorProvider>
     </QueryClientProvider>
   );
 }

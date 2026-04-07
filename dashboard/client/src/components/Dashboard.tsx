@@ -3,11 +3,13 @@ import ConfigPanel from "./ConfigPanel";
 import DataTable from "./DataTable";
 import StatusBar from "./StatusBar";
 import { FiltersPanel } from "./FiltersPanel";
+import TrafficGeneratorPanel from "./TrafficGeneratorPanel";
 import { useStockData } from "../hooks/useStockData";
 import { useSolaceConnection } from "../hooks/useSolaceConnection";
 import { useSolaceConnectionStatus, UpdateOptionsParams } from "../hooks/useSolaceConnectionStatus";
 import { apiRequest } from "../lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
+import { BrokerConfig } from "../types/generatorTypes";
 import { 
   DataSubscription, 
   SimulationSettings, 
@@ -2310,6 +2312,17 @@ export default function Dashboard() {
                 onStopTwitterFeed={handleStopTwitterFeed}
                 onUpdateTwitterFeedOptions={handleUpdateTwitterFeedOptions}
                 // No isCollapsed prop needed for ConfigPanel itself anymore, managed by Dashboard
+              />
+              
+              {/* Traffic Generator Panel - Browser-native publishers */}
+              <TrafficGeneratorPanel
+                brokerConfig={connected && currentFrontendConnection ? {
+                  url: currentFrontendConnection.brokerUrl,
+                  vpnName: currentFrontendConnection.vpnName,
+                  username: currentFrontendConnection.username,
+                  password: currentFrontendConnection.password,
+                } as BrokerConfig : null}
+                className="mt-4 px-3"
               />
             </div>
           )}
