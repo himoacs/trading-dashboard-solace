@@ -19,6 +19,8 @@ import { useToast } from "@/hooks/use-toast";
 import ConnectionStatusDisplay, { ConnectionStatusInfo } from "./ConnectionStatusDisplay";
 import { areStockSelectionsEqual } from '../utils/stockUtils';
 import { useSolaceConnection } from '../hooks/useSolaceConnection';
+import TrafficGeneratorPanel from "./TrafficGeneratorPanel";
+import { BrokerConfig } from "../types/generatorTypes";
 
 interface ConfigPanelProps {
   connected: boolean;
@@ -198,10 +200,10 @@ export default function ConfigPanel({
   const connectionForm = useForm<SolaceConnection>({
     resolver: zodResolver(solaceConnectionSchema),
     defaultValues: {
-      brokerUrl: "",
-      vpnName: "",
-      username: "",
-      password: "",
+      brokerUrl: "ws://localhost:8008",
+      vpnName: "default",
+      username: "demo",
+      password: "demo",
       configType: "frontend"
     }
   });
@@ -216,22 +218,9 @@ export default function ConfigPanel({
   useEffect(() => {
     if (useSameBroker && !backendConnected) {
       const frontendValues = connectionForm.getValues();
-      // Convert ws:// URL to tcp:// format for backend, keeping the host
-      let backendUrl = frontendValues.brokerUrl;
-      try {
-        // Extract host from frontend URL and construct backend URL
-        const hostMatch = frontendValues.brokerUrl.match(/(?:wss?:\/\/)?([^:/]+)/);
-        if (hostMatch) {
-          const host = hostMatch[1];
-          // Default to TCP port 55555 for backend when using same broker
-          backendUrl = `tcp://${host}:55555`;
-        }
-      } catch (e) {
-        // fallback to original URL if parsing fails
-      }
-      
+      // Use the same WebSocket URL for backend traffic generators (browser-native)
       backendConnectionForm.reset({
-        brokerUrl: backendUrl,
+        brokerUrl: frontendValues.brokerUrl,
         vpnName: frontendValues.vpnName,
         username: frontendValues.username,
         password: frontendValues.password,
@@ -456,7 +445,7 @@ export default function ConfigPanel({
             onClick={() => setConnectionSectionCollapsed(!connectionSectionCollapsed)}
           >
             <h2 className="text-xl font-semibold text-foreground mt-2">
-              Frontend Solace Connection {connected && <span className="text-sm text-green-500 ml-2">(Connected)</span>}
+              Solace Connection {connected && <span className="text-sm text-green-500 ml-2">(Connected)</span>}
             </h2>
             {connectionSectionCollapsed ? (
               <ChevronDown className="h-5 w-5 text-muted-foreground" />
@@ -471,7 +460,7 @@ export default function ConfigPanel({
               {connectionForm.formState.isSubmitted && (connectionStatus || connecting) && (
                 <div className="mt-4">
                   <ConnectionStatusDisplay
-                    serviceLabel="Main Connection (Frontend)"
+                    serviceLabel="Broker Connection"
                     statusInfo={memoizedConnectionStatus || { connected: false, connecting: false }}
                   />
                 </div>
@@ -569,161 +558,21 @@ export default function ConfigPanel({
           )}
         </div>
         
-        {/* Backend Solace Connection Section */}
-        <div className="mb-0">
-          <div 
-            className="flex justify-between items-center cursor-pointer mb-2" 
-            onClick={() => setBackendConnectionSectionCollapsed(!backendConnectionSectionCollapsed)}
-          >
-            <h2 className="text-xl font-semibold text-foreground mt-2">
-              Backend Solace Connection {backendConnected && <span className="text-sm text-green-500 ml-2">(Connected)</span>}
-            </h2>
-            {backendConnectionSectionCollapsed ? (
-              <ChevronDown className="h-5 w-5 text-muted-foreground" />
-            ) : (
-              <ChevronUp className="h-5 w-5 text-muted-foreground" />
-            )}
-          </div>
-
-          {/* Same broker checkbox */}
-          <div className="flex items-center space-x-2 mt-2 mb-2">
-            <Checkbox
-              id="useSameBroker"
-              checked={useSameBroker}
-              onCheckedChange={(checked) => setUseSameBroker(checked === true)}
-              disabled={backendConnected}
+        {/* Traffic Generators Section - separate from Solace Connection */}
+        {connected && (
+          <div className="mb-0">
+            <TrafficGeneratorPanel
+              brokerConfig={{
+                url: connectionForm.getValues('brokerUrl'),
+                vpnName: connectionForm.getValues('vpnName'),
+                username: connectionForm.getValues('username'),
+                password: connectionForm.getValues('password'),
+              } as BrokerConfig}
+              className=""
             />
-            <label
-              htmlFor="useSameBroker"
-              className="text-sm text-muted-foreground cursor-pointer select-none"
-            >
-              Use same broker as frontend
-            </label>
           </div>
+        )}
           
-          {!backendConnectionSectionCollapsed && (
-            <>
-              {/* Publisher status displays */}
-              {publisherStatus && (
-                <div className="mt-4">
-                  <ConnectionStatusDisplay
-                    serviceLabel="Market Data Publisher"
-                    statusInfo={displayPublisherStatus}
-                    showFeedControls={true}
-                    showQoSControls={true}
-                    onStartFeed={onStartMarketDataFeed}
-                    onStopFeed={onStopMarketDataFeed}
-                    onUpdateQoS={onUpdateMarketDataFeedOptions}
-                  />
-                </div>
-              )}
-              
-              {twitterStatus && (
-                <div className="mt-4">
-                  <ConnectionStatusDisplay
-                    serviceLabel="Twitter Feed Publisher"
-                    statusInfo={displayTwitterStatus}
-                    showFeedControls={true}
-                    showQoSControls={true}
-                    onStartFeed={onStartTwitterFeed}
-                    onStopFeed={onStopTwitterFeed}
-                    onUpdateQoS={onUpdateTwitterFeedOptions}
-                  />
-                </div>
-              )}
-              
-              <Form {...backendConnectionForm}>
-                <form onSubmit={backendConnectionForm.handleSubmit(handleBackendConnectionSubmit)} className="space-y-4">
-                  <FormField
-                    control={backendConnectionForm.control}
-                    name="brokerUrl"
-                    render={({ field }) => (
-                      <FormItem className="mt-4">
-                        <FormLabel className="text-sm font-medium text-muted-foreground">Broker URL</FormLabel>
-                        <FormControl>
-                          <Input 
-                            {...field} 
-                            placeholder="tcp://solace-broker.example.com:55555"
-                            className={`font-mono text-sm bg-input text-foreground ${!field.value ? 'placeholder:text-muted-foreground' : ''}`}
-                            disabled={backendConnected || useSameBroker}
-                          />
-                        </FormControl>
-                        <FormMessage />
-                      </FormItem>
-                    )}
-                  />
-                  
-                  <FormField
-                    control={backendConnectionForm.control}
-                    name="vpnName"
-                    render={({ field }) => (
-                      <FormItem>
-                        <FormLabel className="text-sm font-medium text-muted-foreground">Message VPN</FormLabel>
-                        <FormControl>
-                          <Input 
-                            {...field} 
-                            placeholder="default"
-                            className={`font-mono text-sm bg-input text-foreground ${!field.value ? 'placeholder:text-muted-foreground' : ''}`}
-                            disabled={backendConnected || useSameBroker}
-                          />
-                        </FormControl>
-                        <FormMessage />
-                      </FormItem>
-                    )}
-                  />
-                  
-                  <FormField
-                    control={backendConnectionForm.control}
-                    name="username"
-                    render={({ field }) => (
-                      <FormItem>
-                        <FormLabel className="text-sm font-medium text-muted-foreground">Username</FormLabel>
-                        <FormControl>
-                          <Input 
-                            {...field} 
-                            placeholder="solace-client"
-                            className={`font-mono text-sm bg-input text-foreground ${!field.value ? 'placeholder:text-muted-foreground' : ''}`}
-                            disabled={backendConnected || useSameBroker}
-                          />
-                        </FormControl>
-                        <FormMessage />
-                      </FormItem>
-                    )}
-                  />
-                  
-                  <FormField
-                    control={backendConnectionForm.control}
-                    name="password"
-                    render={({ field }) => (
-                      <FormItem>
-                        <FormLabel className="text-sm font-medium text-muted-foreground">Password</FormLabel>
-                        <FormControl>
-                          <Input 
-                            {...field} 
-                            type="password" 
-                            placeholder="••••••••"
-                            className={`font-mono text-sm bg-input text-foreground ${!field.value ? 'placeholder:text-muted-foreground' : ''}`}
-                            disabled={backendConnected || useSameBroker}
-                          />
-                        </FormControl>
-                        <FormMessage />
-                      </FormItem>
-                    )}
-                  />
-                  
-                  <Button 
-                    type="submit" 
-                    className={`w-full ${backendConnected ? 'bg-destructive hover:bg-red-600' : 'bg-primary hover:bg-primary/90'}`}
-                    disabled={backendConnecting}
-                  >
-                    {backendConnecting ? 'Connecting...' : backendConnected ? 'Disconnect' : 'Connect'}
-                  </Button>
-                </form>
-              </Form>
-            </>
-          )}
-        </div>
-
         {/* Stock Selection Section */}
         <div className="mb-0">
           <h2 className="text-base font-semibold mb-2 block text-foreground">Stock Selection</h2>

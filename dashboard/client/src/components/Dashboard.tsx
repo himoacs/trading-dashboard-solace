@@ -3,13 +3,13 @@ import ConfigPanel from "./ConfigPanel";
 import DataTable from "./DataTable";
 import StatusBar from "./StatusBar";
 import { FiltersPanel } from "./FiltersPanel";
-import TrafficGeneratorPanel from "./TrafficGeneratorPanel";
+import ChartsTab from "./ChartsTab";
 import { useStockData } from "../hooks/useStockData";
 import { useSolaceConnection } from "../hooks/useSolaceConnection";
 import { useSolaceConnectionStatus, UpdateOptionsParams } from "../hooks/useSolaceConnectionStatus";
 import { apiRequest } from "../lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
-import { BrokerConfig } from "../types/generatorTypes";
+import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { 
   DataSubscription, 
   SimulationSettings, 
@@ -23,13 +23,13 @@ import { STOCK_EXCHANGE_MAP, STOCK_EXCHANGES } from "../lib/stockUtils";
 import { getWildcardTopicForCountry, getExchangesForCountry, getCountryCodeForExchange } from "../lib/countryUtils";
 import { topicManager } from "../lib/topicSubscriptionManager";
 import { areStockSelectionsEqual } from "../utils/stockUtils";
-import { PanelLeftClose, PanelRightClose, Cable } from "lucide-react"; // Import icons
+import { PanelLeftClose, PanelRightClose, Cable, Table, LineChart } from "lucide-react"; // Import icons
 import { Button } from "@/components/ui/button"; // Import Button
 import { TopicExplorerModal } from "./TopicExplorerModal"; // Import the new modal
 import MarketOverviewPanel from "./MarketOverviewPanel"; // Import the new MarketOverviewPanel
 
-import dashboardIcon from '@/assets/solcapitalicon.png'; // Changed: Use solcapitalicon.png
-import solaceLogo from '@/assets/solace-logo.png';
+import dashboardIcon from '@/assets/market-pulse-logo.png';
+import solaceLogo from '@/assets/solace-text-logo.svg';
 import topicExplorerIcon from '@/assets/topic-explorer-icon.png'; // Import the new icon
 import eventPortalIcon from '@/assets/eventPortalIcon.png'; // Added: Import Event Portal icon
 
@@ -39,6 +39,7 @@ export default function Dashboard() {
   console.log('[Dashboard LOG] selectedStocks state:', JSON.stringify(selectedStocks.map(s => s.symbol)));
   const [selectedExchanges, setSelectedExchanges] = useState<string[]>([]);
   const [selectedCountries, setSelectedCountries] = useState<string[]>([]);
+  const [chartSelectedSymbols, setChartSelectedSymbols] = useState<string[]>([]); // Track chart symbols for subscriptions (starts empty)
   const prevLiveStockDataRef = useRef<Record<string, StockDataWithMetadata>>({});
   const [isConfigPanelCollapsed, setIsConfigPanelCollapsed] = useState(false); // State for ConfigPanel
   const [isConfigPanelHidden, setIsConfigPanelHidden] = useState<boolean>(false);
@@ -1466,6 +1467,20 @@ export default function Dashboard() {
       }
     });
 
+    // 2b. Add Market Data Topics for chart-selected stocks
+    chartSelectedSymbols.forEach(symbol => {
+      const stockExchange = getExchangeForStock(symbol);
+      const countryCode = getCountryCodeForExchange(stockExchange);
+      const isCoveredByCountryWildcard = activeCountryWildcards.has(countryCode);
+      const isCoveredByExchangeWildcard = activeExchangeWildcards.has(stockExchange);
+
+      if (!isCoveredByCountryWildcard && !isCoveredByExchangeWildcard) {
+        const marketDataTopic = `market-data/EQ/${countryCode}/${stockExchange}/${symbol}`;
+        desiredSolaceTopics.add(marketDataTopic);
+        console.log(`[Solace Sub Man] Desiring explicit market data topic for CHART stock ${symbol}: ${marketDataTopic}`);
+      }
+    });
+
     // 3. Market Data Topics for user selections and wildcards:
     selectedCountries.forEach(countryId => {
       const wildcardTopic = getWildcardTopicForCountry(countryId);
@@ -1560,6 +1575,7 @@ export default function Dashboard() {
     selectedCountries, 
     selectedStocks, 
     dynamicTopDisplaySymbols, // Added: overview symbols can trigger subscription changes
+    chartSelectedSymbols, // Added: chart symbols trigger subscription changes
     subscribe, 
     unsubscribe, 
     initialSolaceSubscriptionsMemo, 
@@ -2227,16 +2243,15 @@ export default function Dashboard() {
   return (
     <div className="dashboard-container flex flex-col h-screen bg-background text-foreground overflow-hidden">
       {/* NEW BRANDING BANNER - Fixed background and text color for consistent appearance */}
-      <div className="p-2 bg-gradient-to-r from-[#004d40] to-[#00695c] text-gray-100 shadow-md flex items-center justify-between space-x-4"> {/* Changed p-4 to p-2 */}
+      <div className="p-2 bg-gradient-to-r from-[#0d1f36] to-[#152d4a] text-gray-100 shadow-md flex items-center justify-between space-x-4"> {/* Changed p-4 to p-2 */}
         <div className="flex items-center space-x-2"> {/* Changed space-x-4 to space-x-2 */}
           <img src={dashboardIcon} alt="Dashboard Icon" className="h-24 w-24 mt-2" /> {/* Added mt-2 */}
           <div>
-            <h1 className="text-3xl font-bold">El SolCapital Trading Dashboard</h1>
+            <h1 className="text-3xl font-bold">Market Pulse Dashboard</h1>
             <div className="flex items-center text-base mt-1">
               <span>Powered by&nbsp;</span>
-              <img src={solaceLogo} alt="Solace Logo" className="h-4 relative top-[-1px]" /> 
-              <span className="ml-1">Event Mesh</span>
-              <span className="ml-1"> / Built by AI</span>
+              <img src={solaceLogo} alt="Solace Logo" className="h-5 relative top-[1px]" />
+              <span>/ Built by AI</span>
             </div>
           </div>
         </div>
@@ -2314,16 +2329,7 @@ export default function Dashboard() {
                 // No isCollapsed prop needed for ConfigPanel itself anymore, managed by Dashboard
               />
               
-              {/* Traffic Generator Panel - Browser-native publishers */}
-              <TrafficGeneratorPanel
-                brokerConfig={connected && currentFrontendConnection ? {
-                  url: currentFrontendConnection.brokerUrl,
-                  vpnName: currentFrontendConnection.vpnName,
-                  username: currentFrontendConnection.username,
-                  password: currentFrontendConnection.password,
-                } as BrokerConfig : null}
-                className="mt-4 px-3"
-              />
+              {/* Traffic Generator Panel is now embedded in ConfigPanel when useSameBroker is enabled */}
             </div>
           )}
         </div>
@@ -2351,7 +2357,22 @@ export default function Dashboard() {
           lastUpdated={lastUpdated}
                   solaceConnected={connected} // Ensure this is solaceConnected
         />
-        <main className="flex-1 p-4 overflow-y-auto">
+        
+        {/* Tabbed Main Content */}
+        <Tabs defaultValue="table" className="flex-1 flex flex-col overflow-hidden">
+          <TabsList className="mx-4 mb-2 w-fit">
+            <TabsTrigger value="table" className="flex items-center gap-2">
+              <Table className="w-4 h-4" />
+              Data Table
+            </TabsTrigger>
+            <TabsTrigger value="charts" className="flex items-center gap-2">
+              <LineChart className="w-4 h-4" />
+              Charts
+            </TabsTrigger>
+          </TabsList>
+          
+          <TabsContent value="table" className="flex-1 overflow-y-auto m-0 p-0">
+            <main className="flex-1 p-4 overflow-y-auto">
             <MarketOverviewPanel 
               topSecuritiesData={topSecuritiesForOverview} // Use derived data
               isLoading={loadingStockData} // Use main loading state
@@ -2382,7 +2403,18 @@ export default function Dashboard() {
               selectedExchanges={selectedExchanges}
               selectedCountries={selectedCountries}
             />
-        </main>
+            </main>
+          </TabsContent>
+          
+          <TabsContent value="charts" className="flex-1 overflow-auto m-0 p-4">
+            <ChartsTab 
+              liveStockData={liveStockData}
+              availableStocks={allMarketStocks}
+              selectedStocks={selectedStocks}
+              onSelectedSymbolsChange={setChartSelectedSymbols}
+            />
+          </TabsContent>
+        </Tabs>
             </div>
           </div>
         </div>

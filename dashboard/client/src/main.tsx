@@ -16,7 +16,7 @@ try {
   if (rootElement) {
     rootElement.innerHTML = `
       <div style="padding: 2rem; text-align: center;">
-        <h1>SolCapital Dashboard</h1>
+        <h1>Market Pulse Dashboard</h1>
         <p>Error loading the application. Please refresh the page to try again.</p>
       </div>
     `;

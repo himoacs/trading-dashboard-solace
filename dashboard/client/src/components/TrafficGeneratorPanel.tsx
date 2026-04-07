@@ -154,19 +154,18 @@ function GeneratorCard({
         <div className="space-y-2">
           <div className="flex items-center justify-between text-sm">
             <span className="text-muted-foreground">
-              {isMarketData ? 'Message Rate' : 'Tweet Rate'}
+              {isMarketData ? 'Message Rate' : 'Tweet Rate (per stock)'}
             </span>
             <span className="font-mono">
-              {state.config.messageRate} {isMarketData ? 'msg/s' : 'tweets/min'}
+              {state.config.messageRate} {isMarketData ? 'msg/s' : '/min/stock'}
             </span>
           </div>
           <Slider
             value={[state.config.messageRate]}
             onValueChange={handleRateChange}
             min={isMarketData ? 1 : 1}
-            max={isMarketData ? 100 : 30}
+            max={isMarketData ? 500 : 30}
             step={1}
-            disabled={isActive}
           />
         </div>
         
@@ -177,7 +176,6 @@ function GeneratorCard({
               id={`${generatorId}-eliding`}
               checked={state.config.allowMessageEliding}
               onCheckedChange={handleElidingChange}
-              disabled={isActive}
             />
             <label
               htmlFor={`${generatorId}-eliding`}
@@ -191,7 +189,6 @@ function GeneratorCard({
               id={`${generatorId}-dmq`}
               checked={state.config.dmqEligible}
               onCheckedChange={handleDmqChange}
-              disabled={isActive}
             />
             <label
               htmlFor={`${generatorId}-dmq`}

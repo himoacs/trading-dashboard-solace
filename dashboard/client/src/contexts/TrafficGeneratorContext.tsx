@@ -166,25 +166,25 @@ function initializeStocks(): StockInfo[] {
 // Tweet templates for various sentiments
 const TWEET_TEMPLATES = {
   bullish: [
-    "🚀 ${symbol} looking strong today! Technical indicators suggest momentum is building. #Stocks #Trading",
-    "Bullish on ${symbol}! Just saw impressive volume coming in. ${companyName} could be ready for a breakout. 📈",
-    "Big moves expected for ${symbol}. Institutional buying pressure is evident. #WallStreet",
-    "Loading up on ${symbol} here. The risk/reward is excellent at current levels. 🎯",
-    "${companyName} (${symbol}) exceeding expectations. This stock has legs! #Investing",
+    "$${symbol} looking strong today! Technical indicators suggest momentum is building. #Stocks #Trading",
+    "Bullish on $${symbol}! Just saw impressive volume coming in. ${companyName} could be ready for a breakout.",
+    "Big moves expected for $${symbol}. Institutional buying pressure is evident. #WallStreet",
+    "Loading up on $${symbol} here. The risk/reward is excellent at current levels.",
+    "${companyName} ($${symbol}) exceeding expectations. This stock has legs! #Investing",
   ],
   bearish: [
-    "⚠️ Caution on ${symbol}. Seeing distribution patterns form. #Trading #Stocks",
-    "Taking profits on ${symbol}. ${companyName} facing headwinds that can't be ignored. 📉",
-    "Red flags on ${symbol} chart. Support levels breaking down. #TechnicalAnalysis",
-    "Reducing exposure to ${symbol}. Macro conditions not favorable for this sector.",
-    "${companyName} (${symbol}) - waiting for better entry. Current valuation stretched. 🔍",
+    "CAUTION on $${symbol}. Seeing distribution patterns form. #Trading #Stocks",
+    "Taking profits on $${symbol}. ${companyName} facing headwinds that can't be ignored.",
+    "Red flags on $${symbol} chart. Support levels breaking down. #TechnicalAnalysis",
+    "Reducing exposure to $${symbol}. Macro conditions not favorable for this sector.",
+    "${companyName} ($${symbol}) - waiting for better entry. Current valuation stretched.",
   ],
   neutral: [
-    "Watching ${symbol} closely. ${companyName} at a critical juncture here. #Stocks",
-    "Mixed signals on ${symbol}. Need more confirmation before taking a position. 📊",
-    "Sideways action continues for ${symbol}. Waiting for a clear breakout direction.",
-    "${companyName} (${symbol}) - consolidating after recent moves. Patience is key. ⏳",
-    "No strong conviction on ${symbol} right now. Market still deciding direction.",
+    "Watching $${symbol} closely. ${companyName} at a critical juncture here. #Stocks",
+    "Mixed signals on $${symbol}. Need more confirmation before taking a position.",
+    "Sideways action continues for $${symbol}. Waiting for a clear breakout direction.",
+    "${companyName} ($${symbol}) - consolidating after recent moves. Patience is key.",
+    "No strong conviction on $${symbol} right now. Market still deciding direction.",
   ],
 };
 
@@ -277,7 +277,7 @@ export function TrafficGeneratorProvider({ children }: { children: ReactNode }) 
     
     const timestamp = new Date().toISOString().split('T')[1].slice(0, 12);
     const prefix = type === 'error' ? '❌' : type === 'message' ? '📨' : 'ℹ️';
-    generator.output = [...generator.output.slice(-200), `[${timestamp}] ${prefix} ${message}`];
+    generator.output = [...generator.output.slice(-50), `[${timestamp}] ${prefix} ${message}`];
     notifySubscribers(generatorId);
   }, [notifySubscribers]);
   
@@ -426,11 +426,15 @@ export function TrafficGeneratorProvider({ children }: { children: ReactNode }) 
     log(generatorId, `Connecting to ${brokerCfg.url}`);
     
     try {
+      // Generate unique client name to avoid connection conflicts
+      const uniqueClientName = `trading-dashboard-${generatorId}-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+      
       const sessionProperties = {
         url: brokerCfg.url,
         vpnName: brokerCfg.vpnName,
         userName: brokerCfg.username,
         password: brokerCfg.password,
+        clientName: uniqueClientName,
         connectRetries: 3,
         reconnectRetries: 3,
         reconnectRetryWaitInMsecs: 1000,
@@ -453,9 +457,8 @@ export function TrafficGeneratorProvider({ children }: { children: ReactNode }) 
           let topic: string;
           
           if (config.type === 'market-data') {
-            // Get next stock (round-robin)
-            const stock = g.stocks[g.stockIndex % g.stocks.length];
-            g.stockIndex++;
+            // Get random stock for more natural UI updates
+            const stock = g.stocks[Math.floor(Math.random() * g.stocks.length)];
             
             // Simulate price change
             const { newPrice, percentChange, priceChange } = simulatePriceChange(stock.currentPrice);
@@ -490,6 +493,9 @@ export function TrafficGeneratorProvider({ children }: { children: ReactNode }) 
           }
           
           message.setDestination(solace.SolclientFactory.createTopicDestination(topic));
+          
+          // Use string directly - solclientjs handles encoding for ASCII/Latin-1 compatible strings
+          // We've removed emojis from templates to ensure compatibility
           message.setBinaryAttachment(payload);
           
           // Set delivery mode
@@ -535,11 +541,21 @@ export function TrafficGeneratorProvider({ children }: { children: ReactNode }) 
         notifySubscribers(generatorId);
         
         // Start publishing based on rate
-        const intervalMs = config.type === 'market-data'
-          ? 1000 / config.messageRate  // messages per second
-          : (60 / config.messageRate) * 1000;  // tweets per minute -> ms
+        let intervalMs: number;
+        let rateDescription: string;
         
-        log(generatorId, `Publishing every ${intervalMs.toFixed(0)}ms (rate: ${config.messageRate} ${config.type === 'market-data' ? 'msg/s' : 'tweets/min'})`);
+        if (config.type === 'market-data') {
+          intervalMs = 1000 / config.messageRate;  // messages per second
+          rateDescription = `${config.messageRate} msg/s`;
+        } else {
+          // Twitter: rate is tweets per minute PER security
+          // Total tweets/min = rate * number of stocks
+          const totalTweetsPerMin = config.messageRate * g.stocks.length;
+          intervalMs = 60000 / totalTweetsPerMin;
+          rateDescription = `${config.messageRate} tweets/min/stock × ${g.stocks.length} stocks = ${totalTweetsPerMin} tweets/min total`;
+        }
+        
+        log(generatorId, `Publishing every ${intervalMs.toFixed(0)}ms (rate: ${rateDescription})`);
         
         g.publishInterval = setInterval(publishMessage, intervalMs);
         g.statsInterval = setInterval(() => updateGeneratorStats(generatorId), 500);
@@ -597,11 +613,20 @@ export function TrafficGeneratorProvider({ children }: { children: ReactNode }) 
       if (updates.messageRate !== undefined && generator.status === 'running' && generator.publishInterval) {
         clearInterval(generator.publishInterval);
         
-        const intervalMs = newConfig.type === 'market-data'
-          ? 1000 / newConfig.messageRate
-          : (60 / newConfig.messageRate) * 1000;
+        let intervalMs: number;
+        let rateDescription: string;
         
-        log(generatorId, `Rate updated to ${newConfig.messageRate} ${newConfig.type === 'market-data' ? 'msg/s' : 'tweets/min'}`);
+        if (newConfig.type === 'market-data') {
+          intervalMs = 1000 / newConfig.messageRate;
+          rateDescription = `${newConfig.messageRate} msg/s`;
+        } else {
+          // Twitter: rate is tweets per minute PER security
+          const totalTweetsPerMin = newConfig.messageRate * generator.stocks.length;
+          intervalMs = 60000 / totalTweetsPerMin;
+          rateDescription = `${newConfig.messageRate} tweets/min/stock × ${generator.stocks.length} stocks = ${totalTweetsPerMin} tweets/min total`;
+        }
+        
+        log(generatorId, `Rate updated to ${rateDescription}`);
         
         // Re-create publish function with updated config
         const publishMessage = () => {
@@ -613,8 +638,8 @@ export function TrafficGeneratorProvider({ children }: { children: ReactNode }) 
             let topic: string;
             
             if (newConfig.type === 'market-data') {
-              const stock = generator.stocks[generator.stockIndex % generator.stocks.length];
-              generator.stockIndex++;
+              // Get random stock for more natural UI updates
+              const stock = generator.stocks[Math.floor(Math.random() * generator.stocks.length)];
               const { newPrice, percentChange, priceChange } = simulatePriceChange(stock.currentPrice);
               stock.currentPrice = newPrice;
               
@@ -644,6 +669,8 @@ export function TrafficGeneratorProvider({ children }: { children: ReactNode }) 
             }
             
             message.setDestination(solace.SolclientFactory.createTopicDestination(topic));
+            
+            // Use string directly - solclientjs handles encoding for ASCII/Latin-1 compatible strings
             message.setBinaryAttachment(payload);
             
             if (newConfig.deliveryMode === 'PERSISTENT') {
