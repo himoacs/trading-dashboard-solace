@@ -80,6 +80,7 @@ export default function ConfigPanel({
   const { toast } = useToast();
   const [searchQuery, setSearchQuery] = useState("");
   const [connectionSectionCollapsed, setConnectionSectionCollapsed] = useState(false);
+  const [useSameBroker, setUseSameBroker] = useState(false);
   
   // Local state for selected stocks, derived from props
   // Sort by symbol to ensure consistent order for comparison
@@ -207,6 +208,37 @@ export default function ConfigPanel({
   
   // Start with the backend connection panel expanded when not connected
   const [backendConnectionSectionCollapsed, setBackendConnectionSectionCollapsed] = useState(false);
+
+  // Watch frontend form values for syncing with backend when useSameBroker is enabled
+  const frontendFormValues = connectionForm.watch();
+
+  // Sync backend form with frontend form when "use same broker" is enabled
+  useEffect(() => {
+    if (useSameBroker && !backendConnected) {
+      const frontendValues = connectionForm.getValues();
+      // Convert ws:// URL to tcp:// format for backend, keeping the host
+      let backendUrl = frontendValues.brokerUrl;
+      try {
+        // Extract host from frontend URL and construct backend URL
+        const hostMatch = frontendValues.brokerUrl.match(/(?:wss?:\/\/)?([^:/]+)/);
+        if (hostMatch) {
+          const host = hostMatch[1];
+          // Default to TCP port 55555 for backend when using same broker
+          backendUrl = `tcp://${host}:55555`;
+        }
+      } catch (e) {
+        // fallback to original URL if parsing fails
+      }
+      
+      backendConnectionForm.reset({
+        brokerUrl: backendUrl,
+        vpnName: frontendValues.vpnName,
+        username: frontendValues.username,
+        password: frontendValues.password,
+        configType: "backend"
+      });
+    }
+  }, [useSameBroker, frontendFormValues, backendConnected]);
 
   // Get available stocks for selection
   const { data: availableStocks = [], isLoading: loadingStocks } = useQuery<StockSelection[]>({
@@ -552,6 +584,22 @@ export default function ConfigPanel({
               <ChevronUp className="h-5 w-5 text-muted-foreground" />
             )}
           </div>
+
+          {/* Same broker checkbox */}
+          <div className="flex items-center space-x-2 mt-2 mb-2">
+            <Checkbox
+              id="useSameBroker"
+              checked={useSameBroker}
+              onCheckedChange={(checked) => setUseSameBroker(checked === true)}
+              disabled={backendConnected}
+            />
+            <label
+              htmlFor="useSameBroker"
+              className="text-sm text-muted-foreground cursor-pointer select-none"
+            >
+              Use same broker as frontend
+            </label>
+          </div>
           
           {!backendConnectionSectionCollapsed && (
             <>
@@ -597,7 +645,7 @@ export default function ConfigPanel({
                             {...field} 
                             placeholder="tcp://solace-broker.example.com:55555"
                             className={`font-mono text-sm bg-input text-foreground ${!field.value ? 'placeholder:text-muted-foreground' : ''}`}
-                            disabled={backendConnected}
+                            disabled={backendConnected || useSameBroker}
                           />
                         </FormControl>
                         <FormMessage />
@@ -616,7 +664,7 @@ export default function ConfigPanel({
                             {...field} 
                             placeholder="default"
                             className={`font-mono text-sm bg-input text-foreground ${!field.value ? 'placeholder:text-muted-foreground' : ''}`}
-                            disabled={backendConnected}
+                            disabled={backendConnected || useSameBroker}
                           />
                         </FormControl>
                         <FormMessage />
@@ -635,7 +683,7 @@ export default function ConfigPanel({
                             {...field} 
                             placeholder="solace-client"
                             className={`font-mono text-sm bg-input text-foreground ${!field.value ? 'placeholder:text-muted-foreground' : ''}`}
-                            disabled={backendConnected}
+                            disabled={backendConnected || useSameBroker}
                           />
                         </FormControl>
                         <FormMessage />
@@ -655,7 +703,7 @@ export default function ConfigPanel({
                             type="password" 
                             placeholder="••••••••"
                             className={`font-mono text-sm bg-input text-foreground ${!field.value ? 'placeholder:text-muted-foreground' : ''}`}
-                            disabled={backendConnected}
+                            disabled={backendConnected || useSameBroker}
                           />
                         </FormControl>
                         <FormMessage />
