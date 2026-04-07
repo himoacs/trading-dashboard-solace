@@ -1,19 +1,19 @@
-# SolCapital Sentiment Dashboard
+# Market Pulse Dashboard
 
 ## Overview
 
-SolCapital Sentiment Dashboard is a sophisticated financial intelligence platform that delivers real-time market data, social media sentiment analysis, and AI-generated trading signals through an interactive dashboard. The application showcases the power of event-driven architecture using Solace PubSub+ for efficient and reliable message streaming between components.
-
-![Dashboard Screenshot](./attached_assets/Screenshot%202025-05-15%20at%209.19.10%20PM.png)
+Market Pulse Dashboard is a sophisticated financial intelligence platform that delivers real-time market data, social media sentiment analysis, and AI-generated trading signals through an interactive dashboard. The application showcases the power of event-driven architecture using Solace PubSub+ for efficient and reliable message streaming between components.
 
 ## Application Features
 
 - **Live Market Intelligence**: Real-time stock pricing data with percentage change indicators
+- **Real-time Charts**: Interactive TradingView charts with multi-stock overlay
 - **Social Media Sentiment**: AI-analyzed tweets related to selected financial instruments
 - **Trading Signals**: Smart trading recommendations with confidence scores
+- **Traffic Generator**: Browser-native Solace message publishing with configurable settings
 - **Exchange & Country Filtering**: Filter stocks by exchanges (NASDAQ, NYSE, etc.) or countries (US, JP, UK, etc.)
 - **Wildcard Topic Subscriptions**: Demonstrate Solace's powerful topic hierarchy and wildcard filtering capabilities
-- **WebSocket Integration**: Real-time UI updates via WebSocket connections
+- **WebSocket Integration**: Real-time UI updates via browser-native Solace WebSocket connections
 - **User-Controlled Data Flow**: Toggle data feeds on/off with the Live Data switch
 
 ## Technical Architecture
