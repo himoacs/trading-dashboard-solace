@@ -540,24 +540,55 @@ export function TrafficGeneratorProvider({ children }: { children: ReactNode }) 
         g.startTime = Date.now();
         notifySubscribers(generatorId);
         
-        // Start publishing based on rate
+        // Calculate publishing strategy based on rate
+        // Use batch publishing for high rates to overcome browser setInterval limitations
+        const MIN_INTERVAL_MS = 50; // Minimum interval for reliable timing (20 ticks/second)
+        
         let intervalMs: number;
+        let messagesPerTick: number;
         let rateDescription: string;
         
         if (config.type === 'market-data') {
-          intervalMs = 1000 / config.messageRate;  // messages per second
-          rateDescription = `${config.messageRate} msg/s`;
+          // Market data: rate is messages per second
+          const targetIntervalMs = 1000 / config.messageRate;
+          
+          if (targetIntervalMs < MIN_INTERVAL_MS) {
+            // High rate: use batch publishing
+            intervalMs = MIN_INTERVAL_MS;
+            messagesPerTick = Math.ceil(config.messageRate / (1000 / MIN_INTERVAL_MS));
+            rateDescription = `${config.messageRate} msg/s (${messagesPerTick} msgs every ${intervalMs}ms)`;
+          } else {
+            // Low rate: one message per tick
+            intervalMs = targetIntervalMs;
+            messagesPerTick = 1;
+            rateDescription = `${config.messageRate} msg/s`;
+          }
         } else {
           // Twitter: rate is tweets per minute PER security
-          // Total tweets/min = rate * number of stocks
           const totalTweetsPerMin = config.messageRate * g.stocks.length;
-          intervalMs = 60000 / totalTweetsPerMin;
-          rateDescription = `${config.messageRate} tweets/min/stock × ${g.stocks.length} stocks = ${totalTweetsPerMin} tweets/min total`;
+          const targetIntervalMs = 60000 / totalTweetsPerMin;
+          
+          if (targetIntervalMs < MIN_INTERVAL_MS) {
+            intervalMs = MIN_INTERVAL_MS;
+            messagesPerTick = Math.ceil(totalTweetsPerMin / (60000 / MIN_INTERVAL_MS));
+            rateDescription = `${config.messageRate} tweets/min/stock × ${g.stocks.length} stocks (${messagesPerTick} per tick)`;
+          } else {
+            intervalMs = targetIntervalMs;
+            messagesPerTick = 1;
+            rateDescription = `${config.messageRate} tweets/min/stock × ${g.stocks.length} stocks = ${totalTweetsPerMin} tweets/min`;
+          }
         }
         
-        log(generatorId, `Publishing every ${intervalMs.toFixed(0)}ms (rate: ${rateDescription})`);
+        log(generatorId, `Publishing ${messagesPerTick} msg(s) every ${intervalMs.toFixed(0)}ms (rate: ${rateDescription})`);
         
-        g.publishInterval = setInterval(publishMessage, intervalMs);
+        // Batch publish function
+        const batchPublish = () => {
+          for (let i = 0; i < messagesPerTick; i++) {
+            publishMessage();
+          }
+        };
+        
+        g.publishInterval = setInterval(batchPublish, intervalMs);
         g.statsInterval = setInterval(() => updateGeneratorStats(generatorId), 500);
       });
       
@@ -613,20 +644,38 @@ export function TrafficGeneratorProvider({ children }: { children: ReactNode }) 
       if (updates.messageRate !== undefined && generator.status === 'running' && generator.publishInterval) {
         clearInterval(generator.publishInterval);
         
+        // Calculate publishing strategy based on rate (same logic as initial start)
+        const MIN_INTERVAL_MS = 50;
         let intervalMs: number;
+        let messagesPerTick: number;
         let rateDescription: string;
         
         if (newConfig.type === 'market-data') {
-          intervalMs = 1000 / newConfig.messageRate;
-          rateDescription = `${newConfig.messageRate} msg/s`;
+          const targetIntervalMs = 1000 / newConfig.messageRate;
+          if (targetIntervalMs < MIN_INTERVAL_MS) {
+            intervalMs = MIN_INTERVAL_MS;
+            messagesPerTick = Math.ceil(newConfig.messageRate / (1000 / MIN_INTERVAL_MS));
+            rateDescription = `${newConfig.messageRate} msg/s (${messagesPerTick} msgs every ${intervalMs}ms)`;
+          } else {
+            intervalMs = targetIntervalMs;
+            messagesPerTick = 1;
+            rateDescription = `${newConfig.messageRate} msg/s`;
+          }
         } else {
-          // Twitter: rate is tweets per minute PER security
           const totalTweetsPerMin = newConfig.messageRate * generator.stocks.length;
-          intervalMs = 60000 / totalTweetsPerMin;
-          rateDescription = `${newConfig.messageRate} tweets/min/stock × ${generator.stocks.length} stocks = ${totalTweetsPerMin} tweets/min total`;
+          const targetIntervalMs = 60000 / totalTweetsPerMin;
+          if (targetIntervalMs < MIN_INTERVAL_MS) {
+            intervalMs = MIN_INTERVAL_MS;
+            messagesPerTick = Math.ceil(totalTweetsPerMin / (60000 / MIN_INTERVAL_MS));
+            rateDescription = `${newConfig.messageRate} tweets/min/stock (${messagesPerTick} per tick)`;
+          } else {
+            intervalMs = targetIntervalMs;
+            messagesPerTick = 1;
+            rateDescription = `${newConfig.messageRate} tweets/min/stock × ${generator.stocks.length} stocks`;
+          }
         }
         
-        log(generatorId, `Rate updated to ${rateDescription}`);
+        log(generatorId, `Rate updated: ${messagesPerTick} msg(s) every ${intervalMs.toFixed(0)}ms (${rateDescription})`);
         
         // Re-create publish function with updated config
         const publishMessage = () => {
@@ -695,7 +744,14 @@ export function TrafficGeneratorProvider({ children }: { children: ReactNode }) 
           }
         };
         
-        generator.publishInterval = setInterval(publishMessage, intervalMs);
+        // Batch publish function
+        const batchPublish = () => {
+          for (let i = 0; i < messagesPerTick; i++) {
+            publishMessage();
+          }
+        };
+        
+        generator.publishInterval = setInterval(batchPublish, intervalMs);
       }
       
       // Update stored config

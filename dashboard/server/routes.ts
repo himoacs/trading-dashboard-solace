@@ -14,13 +14,8 @@ import {
 import { solaceService, SessionType } from "./services/solaceService"; 
 import { marketDataService } from "./services/marketDataService";
 import { llmService } from "./services/llmService";
-// Use the standalone Twitter Service that has its own isolated Solace connection
-import { standaloneTwitterService } from "./services/standaloneTwitterService";
-// Import simpleTwitterService for additional Twitter functions
-import { simpleTwitterService } from "./services/simpleTwitterService";
 // Import publisher services that use user-provided credentials
 import { publisherSolaceService } from "./services/publisherSolaceService";
-import { twitterPublisherService } from "./services/twitterPublisherService";
 
 // Define MessageTypes if not already defined or imported (based on previous context)
 export const MessageTypes = {
@@ -493,12 +488,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
                 // Start market data simulation
                 await marketDataService.startSimulation([symbol], 5);
                 
-                // DO NOT automatically start Twitter feed simulation when subscribing to stocks
-                // Just track the symbol and set frequency for when user manually activates
-                console.log(`Tracking symbol ${symbol} for Twitter feed (NOT automatically starting - user must manually activate)`);
-                // Set frequency for when user decides to start the feed (60 seconds between tweets)
-                standaloneTwitterService.setFrequency(60);
-                // Do NOT call startSimulation - wait for explicit user action
+                // Twitter feed is now browser-native via TrafficGeneratorPanel
                 
                 // News feed and economic indicators removed as requested
                 
@@ -510,13 +500,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
                 // Always start market data as it's essential
                 await marketDataService.startSimulation([symbol], 5);
                 
-                // Do NOT automatically start Twitter feed simulation when subscribing to stocks
-                // The user must explicitly start the Twitter feed via the dedicated button
-                console.log(`Tracking symbol ${symbol} for Twitter feed (NOT automatically starting - user must manually activate)`);
-                // Set frequency for when user decides to start the feed (60 seconds between tweets)
-                standaloneTwitterService.setFrequency(60);
-                // Do NOT call startSimulation - wait for explicit user action
-                // await standaloneTwitterService.startSimulation([symbol], 60);
+                // Twitter feed is now browser-native via TrafficGeneratorPanel
                 // await llmService.startSignalGeneration([symbol]); // DEPRECATED: Also remove here if present
               }
             } catch (error) {
@@ -1505,7 +1489,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Get real status from services - use isConnected for backwards compatibility
       const frontendConnected = solaceService.isConnected();
       const publisherStatus = publisherSolaceService.getConnectionStatus();
-      const twitterStatus = twitterPublisherService.getConnectionStatus();
       
       // Get additional frontend connection details if available
       let frontendConnecting = false;
@@ -1545,16 +1528,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
         // Include original fields for backward compatibility
         frontend: frontendConnected,
         publisher: publisherStatus.connected,
-        twitter: twitterStatus.connected,
-        connecting: frontendConnecting || publisherStatus.connecting || twitterStatus.connecting,
+        connecting: frontendConnecting || publisherStatus.connecting,
         publisherTcpPort: publisherStatus.tcpPort || "55555",
-        twitterTcpPort: twitterStatus.tcpPort || "55555",
-        lastError: twitterStatus.lastError || publisherStatus.lastError || "",
+        lastError: publisherStatus.lastError || "",
         
         // Include detailed status info for each service
         connectionStatus: frontendStatus,
-        publisherStatus: publisherStatus,
-        twitterStatus: twitterStatus
+        publisherStatus: publisherStatus
       });
     } catch (error) {
       console.error("Error checking Solace status:", error);
@@ -1643,7 +1623,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         
         // Reset all simulation state
         await marketDataService.stopSimulation();
-        standaloneTwitterService.stopAllTweets();
+        // Twitter feed is now browser-native via TrafficGeneratorPanel
         // News feed and economic indicators removed as requested
         // await newsService.stopSimulation();
         // await economicIndicatorService.stopSimulation();
@@ -1772,77 +1752,23 @@ export async function registerRoutes(app: Express): Promise<Server> {
           marketDataPublisherStatus = publisherSolaceService.getConnectionStatus();
         }
         
-        try {
-          console.log("Connecting Twitter feed publisher to Solace...");
-          await twitterPublisherService.connect(validatedData);
-          console.log("Twitter feed publisher connected successfully");
-          twitterPublisherConnected = true;
-          twitterPublisherStatus = twitterPublisherService.getConnectionStatus();
-          
-          // Don't automatically activate Twitter feed
-          // This will be done explicitly by the user via the twitter-feed/start endpoint
-          console.log("Twitter feed publisher connected but feed not activated yet. User must activate manually.");
-        } catch (twitterPublisherError) {
-          console.error("Error connecting Twitter feed publisher:", twitterPublisherError);
-          twitterPublisherStatus = twitterPublisherService.getConnectionStatus();
-        }
+        // Twitter feed is now browser-native via TrafficGeneratorPanel
         
         // Return detailed status information
         res.json({ 
-          success: marketDataPublisherConnected || twitterPublisherConnected, 
-          message: marketDataPublisherConnected && twitterPublisherConnected 
-            ? "Successfully connected both market data and Twitter publishers to Solace"
-            : marketDataPublisherConnected 
-              ? "Connected market data publisher only, Twitter publisher failed" 
-              : twitterPublisherConnected
-                ? "Connected Twitter publisher only, market data publisher failed"
-                : "Failed to connect both publisher services to Solace",
+          success: marketDataPublisherConnected, 
+          message: marketDataPublisherConnected 
+            ? "Successfully connected market data publisher to Solace"
+            : "Failed to connect market data publisher to Solace",
           config,
           status: {
             backend: {
               marketDataPublisher: marketDataPublisherConnected ? 'connected' : 'disconnected',
-              twitterPublisher: twitterPublisherConnected ? 'connected' : 'disconnected',
             }
           },
           // Include detailed status for monitoring
-          marketDataPublisherStatus,
-          twitterPublisherStatus
+          marketDataPublisherStatus
         });
-      } else if (configType === 'twitter' || configType === 'twitter-publisher') {
-        // For twitter-specific connection
-        console.log("Connecting dedicated Twitter publisher service...");
-        try {
-          await twitterPublisherService.connect(validatedData);
-          console.log("Twitter publisher connected successfully");
-          
-          // Get detailed status for response
-          const twitterStatus = twitterPublisherService.getConnectionStatus();
-          
-          // Don't automatically activate the Twitter feed - this must be done explicitly
-          console.log("Twitter publisher connected but feed not activated yet. User must activate manually.");
-          
-          res.json({ 
-            success: true, 
-            message: "Successfully connected Twitter publisher to Solace",
-            config,
-            status: {
-              twitter: twitterPublisherService.isConnected() ? 'connected' : 'disconnected'
-            },
-            twitterStatus // Include detailed status
-          });
-        } catch (error) {
-          console.error("Error connecting Twitter publisher:", error);
-          
-          // Get status even if connection failed
-          const twitterStatus = twitterPublisherService.getConnectionStatus();
-          
-          res.status(400).json({ 
-            success: false,
-            message: error instanceof Error ? error.message : "Failed to connect Twitter publisher",
-            config,
-            twitterStatus
-          });
-        }
       } else {
         // Unknown config type
         res.status(400).json({ 
@@ -1868,7 +1794,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       try {
         // Stop in a specific order to ensure clean shutdown
         await marketDataService.stopSimulation();
-        standaloneTwitterService.stopAllTweets();
+        // Twitter feed is now browser-native via TrafficGeneratorPanel
         // News feed and economic indicators removed as requested
         // await newsService.stopSimulation();
         // await economicIndicatorService.stopSimulation();
@@ -1888,15 +1814,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
       } catch (publisherError) {
         console.error("Error disconnecting market data publisher:", publisherError);
         // Continue with disconnection even if publisher service fails to disconnect
-      }
-      
-      try {
-        console.log("Disconnecting Twitter publisher service...");
-        await twitterPublisherService.disconnect();
-        console.log("Twitter publisher disconnected successfully");
-      } catch (twitterError) {
-        console.error("Error disconnecting Twitter publisher:", twitterError);
-        // Continue with disconnection even if Twitter publisher service fails to disconnect
       }
       
       // Disconnect main Solace connection with a timeout to prevent hanging
@@ -2346,822 +2263,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
       });
     }
   });
-  
-  // API endpoint for configuring Twitter feed options (including frequency and QoS)
-  app.post("/api/twitter-feed/message-options", async (req: Request, res: Response) => {
-    try {
-      console.log("API: Twitter feed message options request received:", req.body);
-      
-      const { frequency, frequencyMs: explicitFrequencyMs, deliveryMode, allowMessageEliding, dmqEligible } = req.body;
-      let changesApplied = false;
-      let messageDetails = [];
-      
-      // Handle frequency setting if provided
-      if (frequency !== undefined || explicitFrequencyMs !== undefined) {
-        let frequencyMs: number;
-        let reportedFrequency: number;
-        
-        if (explicitFrequencyMs !== undefined) {
-          // Validate millisecond frequency for Twitter (e.g., 500ms to 60000ms)
-          if (typeof explicitFrequencyMs !== 'number' || explicitFrequencyMs < 500 || explicitFrequencyMs > 60000) {
-            return res.status(400).json({
-              success: false,
-              message: "Invalid frequencyMs. Must be a number between 500 and 60000 milliseconds for Twitter feed"
-            });
-          }
-          frequencyMs = explicitFrequencyMs;
-          reportedFrequency = Math.round(frequencyMs / 1000); 
-        } else {
-          // Validate seconds-based frequency (e.g., 1s to 60s for Twitter)
-          if (typeof frequency !== 'number' || frequency < 1 || frequency > 60) {
-            return res.status(400).json({
-              success: false,
-              message: "Invalid frequency. Must be a number between 1 and 60 seconds for Twitter feed"
-            });
-          }
-          frequencyMs = frequency * 1000;
-          reportedFrequency = frequency;
-        }
-        
-        console.log(`API: Setting Twitter feed update frequency to ${reportedFrequency} seconds (${frequencyMs}ms)`);
-        
-        // Prefer millisecond-based update if available
-        if (twitterPublisherService.setTweetFrequencyMs) {
-          await twitterPublisherService.setTweetFrequencyMs(frequencyMs);
-          changesApplied = true;
-          messageDetails.push(`frequency updated to ${reportedFrequency} seconds (${frequencyMs}ms)`);
-        } else if (twitterPublisherService.setTweetFrequency) { // Fallback to seconds
-          await twitterPublisherService.setTweetFrequency(reportedFrequency);
-          changesApplied = true;
-          messageDetails.push(`frequency updated to ${reportedFrequency} seconds`);
-        } else {
-          console.warn("Warning: twitterPublisherService frequency update methods are not available");
-        }
-      }
-      
-      // Handle message delivery options if any provided
-      if (deliveryMode !== undefined || allowMessageEliding !== undefined || dmqEligible !== undefined) {
-        const messageOptions: any = {};
-        
-        if (deliveryMode !== undefined) {
-          if (deliveryMode !== "DIRECT" && deliveryMode !== "PERSISTENT") {
-            return res.status(400).json({ success: false, message: "Invalid deliveryMode. Must be 'DIRECT' or 'PERSISTENT'" });
-          }
-          messageOptions.deliveryMode = deliveryMode;
-          messageDetails.push(`delivery mode set to ${deliveryMode}`);
-        }
-        
-        if (allowMessageEliding !== undefined) {
-          const allowMsgElidingBool = typeof allowMessageEliding === 'string' ? allowMessageEliding.toLowerCase() === 'true' : Boolean(allowMessageEliding);
-          messageOptions.allowMessageEliding = allowMsgElidingBool;
-          messageDetails.push(`message eliding ${allowMsgElidingBool ? 'enabled' : 'disabled'}`);
-        }
-        
-        if (dmqEligible !== undefined) {
-          const dmqEligibleBool = typeof dmqEligible === 'string' ? dmqEligible.toLowerCase() === 'true' : Boolean(dmqEligible);
-          messageOptions.dmqEligible = dmqEligibleBool;
-          messageDetails.push(`DMQ eligibility ${dmqEligibleBool ? 'enabled' : 'disabled'}`);
-        }
-        
-        if (Object.keys(messageOptions).length > 0) {
-          console.log("Applying QoS settings to Twitter publisher service:", messageOptions);
-          // Ensure setMessageOptions is awaited if it's async
-          // The service method should be robust enough to handle partial updates.
-          const qosSuccess = await twitterPublisherService.setMessageOptions(messageOptions);
-          if (qosSuccess) {
-            console.log("Successfully applied QoS settings to Twitter publisher");
-            changesApplied = true;
-          } else {
-            console.error("Failed to apply QoS settings to Twitter publisher:", messageOptions);
-            return res.status(500).json({ success: false, message: "Failed to apply QoS settings to Twitter publisher" });
-          }
-        }
-      }
-      
-      const twitterStatus = twitterPublisherService.getConnectionStatus();
-      let responseMessage = changesApplied ? `Successfully updated Twitter feed settings: ${messageDetails.join(", ")}` : "No changes applied to Twitter feed settings";
-      
-      const response = {
-        success: true,
-        message: responseMessage,
-        twitterStatus, // This should contain the updated frequency and messageOptions from the service
-      };
-      
-      console.log("Twitter feed message-options API response:", response);
-      return res.status(200).json(response);
-    } catch (error) {
-      console.error("Error configuring Twitter feed message options:", error);
-      return res.status(500).json({
-        success: false,
-        message: error instanceof Error ? error.message : "Internal server error configuring Twitter feed options"
-      });
-    }
-  });
-  
-  // Twitter feed control endpoints
-  app.post("/api/twitter-feed/start", async (req: Request, res: Response) => {
-    try {
-      const { symbols = ['AAPL', 'MSFT', 'AMZN', 'GOOG'], frequency = 10, includeWildcardStocks = true } = req.body;
-      
-      // Add platform detection for better debugging on macOS
-      console.log(`Twitter feed start request received (Platform: ${process.platform}):`, {
-        symbolCount: symbols.length,
-        frequency,
-        includeWildcardStocks,
-        timestamp: new Date().toISOString()
-      });
-      
-      // Get initial status to determine if feed is already active
-      const initialStatus = twitterPublisherService.getConnectionStatus();
-      
-      // Check if there's a connection first, but don't fail immediately
-      // We'll still activate the feed flag, and tweets will queue until connection is established
-      const isConnected = twitterPublisherService.isConnected();
-      if (!isConnected) {
-        console.log("Warning: Starting Twitter feed without active connection. Tweets will queue until connected.");
-      }
-      
-      // Step 1: First enable the simple Twitter service
-      console.log("Enabling SimpleTwitterService for tweet generation");
-      await simpleTwitterService.setEnabled(true);
-      
-      // IMPORTANT: Use only the exact symbols provided by the frontend
-      // This ensures we only publish tweets for stocks that are currently visible
-      let allActiveSymbols = [...symbols];
-      
-      // If includeWildcardStocks flag is true and there are wildcard subscriptions active,
-      // we need to respect those but ONLY include stocks that are actually displayed
-      if (includeWildcardStocks) {
-        try {
-          console.log("Getting displayed stocks that are visible due to wildcard subscriptions");
-          
-          // Get the stocks that are actually displayed on the frontend
-          // The frontend should be sending us the complete list of currently visible stocks
-          console.log(`Frontend provided ${symbols.length} visible stocks: ${symbols.join(', ')}`);
-          
-          // Log the symbols we're going to use
-          console.log(`Using exactly the frontend-provided symbols for Twitter feed: ${allActiveSymbols.length} stocks`);
-        } catch (error) {
-          console.error("Error handling wildcard-visible stocks:", error);
-          // Continue with original symbols list if there's an error
-        }
-      }
-      
-      // Step 2: Set the tweet frequency on all services
-      // Check if we have an explicit millisecond frequency from the request
-      const explicitFrequencyMs = req.body.frequencyMs;
-      
-      // Convert seconds to milliseconds if milliseconds not provided
-      const milliseconds = explicitFrequencyMs !== undefined ? explicitFrequencyMs : frequency * 1000;
-      
-      // Log the frequency settings being applied
-      console.log(`Setting tweet frequency to ${frequency} seconds (${milliseconds}ms) on all Twitter services`);
-      
-      // Set frequency in seconds for services that use seconds-based API
-      if (typeof simpleTwitterService.setTweetFrequency === 'function') {
-        simpleTwitterService.setTweetFrequency(frequency);
-      }
-      
-      if (typeof standaloneTwitterService.setFrequency === 'function') {
-        standaloneTwitterService.setFrequency(frequency);
-      }
-      
-      // Use millisecond precision for the TwitterPublisherService if available
-      if (typeof twitterPublisherService.setTweetFrequencyMs === 'function') {
-        await twitterPublisherService.setTweetFrequencyMs(milliseconds);
-      } else if (typeof twitterPublisherService.setTweetFrequency === 'function') {
-        // Fallback to seconds if millisecond method not available
-        await twitterPublisherService.setTweetFrequency(frequency);
-      }
-      
-      // Step 3: Set the active symbols on both services using the improved method
-      // ONLY use the symbols that were provided by the frontend to ensure synchronization
-      console.log(`Setting active symbols for tweet generation: ${allActiveSymbols.join(', ')}`);
-      if (typeof simpleTwitterService.setActiveSymbols === 'function') {
-        simpleTwitterService.setActiveSymbols(allActiveSymbols);
-      }
-      
-      // Step 4: Start the Twitter feed (activates the publisher service)
-      // using the exact symbols provided by the frontend
-      console.log(`Starting Twitter publisher feed service for symbols: ${allActiveSymbols.join(', ')} with frequency ${frequency}s (${milliseconds}ms) (Platform: ${process.platform})`);
-      
-      // Additional verification for macOS - sometimes the startFeed call needs extra handling
-      let result;
-      let publisherServiceSuccess = false; // Initialize to false
-      try {
-        const publisherResult = await twitterPublisherService.startFeed(allActiveSymbols, frequency);
-        // The startFeed promise resolves with true on success, or an error (which is caught below)
-        publisherServiceSuccess = publisherResult; // publisherResult is a boolean
-        
-        // Add comprehensive verification for all platforms with enhanced handling for macOS
-        console.log(`Platform detection: ${process.platform} - performing feed start verification`);
-        
-        // Minimal delay to ensure responsiveness
-        const initialDelay = process.platform === 'darwin' ? 50 : 25;
-        console.log(`Using ${initialDelay}ms initial verification delay for ${process.platform}`);
-        await new Promise(resolve => setTimeout(resolve, initialDelay));
-        
-        // Verify feed started correctly
-        const feedStatus = twitterPublisherService.isFeedActive();
-        console.log(`Feed active status verification: ${feedStatus ? 'ACTIVE' : 'INACTIVE'}`);
-        
-        if (!feedStatus) {
-          console.log(`Platform verification: Feed not active after initial start - applying recovery steps`);
-          
-          // Use the enhanced setFeedActive method with platform-specific optimizations
-          console.log(`Platform recovery: Using enhanced setFeedActive method for ${process.platform}`);
-          const feedActiveNow = twitterPublisherService.setFeedActive(true);
-          
-          // Ultra-responsive delay for immediate UI feedback
-          const verificationDelay = process.platform === 'darwin' ? 30 : 20;
-          console.log(`Using ${verificationDelay}ms recovery verification delay for ${process.platform}`);
-          
-          // Wait for minimal time and check status again
-          await new Promise(resolve => setTimeout(resolve, verificationDelay));
-          
-          // Re-register symbols anyway as precaution
-          console.log("Ensuring symbols are properly registered");
-          // Update the service's active symbols via the public method
-          if (typeof twitterPublisherService.updateActiveSymbols === 'function') {
-            twitterPublisherService.updateActiveSymbols(allActiveSymbols);
-          }
-          
-          // Verify the feed activation one final time
-          const feedVerification = twitterPublisherService.isFeedActive();
-          console.log(`Platform verification: Feed active after recovery steps: ${feedVerification ? 'SUCCESS' : 'FAILED'}`);
-          
-          // Set result with the updated status
-          result = { 
-            success: feedVerification, 
-            feedActive: feedVerification, 
-            connected: twitterPublisherService.isConnected() 
-          };
-        } else {
-          console.log(`Platform verification: Feed successfully active on ${process.platform}`);
-        }
-      } catch (error) {
-        console.error("Error starting Twitter feed:", error);
-        result = { success: false, feedActive: false, connected: twitterPublisherService.isConnected() };
-      }
-      
-      // Also ensure millisecond precision is set if available
-      // This is a failsafe in case startFeed only set seconds-based frequency
-      if (typeof twitterPublisherService.setTweetFrequencyMs === 'function') {
-        await twitterPublisherService.setTweetFrequencyMs(milliseconds);
-      }
-      
-      // Step 5: Also update StandaloneTwitterService (fallback)
-      console.log(`Starting tweet generation in StandaloneTwitterService for symbols: ${allActiveSymbols.join(', ')}`);
-      // Make this non-blocking
-      const standalonePromise = standaloneTwitterService.startSimulation(allActiveSymbols, frequency);
-      standalonePromise.then(success => {
-        if (success) {
-          console.log('StandaloneTwitterService started simulation successfully in background.');
-        } else {
-          console.warn('StandaloneTwitterService failed to start simulation in background.');
-        }
-      }).catch(error => {
-        console.error('Error starting StandaloneTwitterService simulation in background:', error);
-      });
-
-      // Force a tweet to verify the system is working - make this non-blocking
-      console.log('Forcing initial tweets to verify Twitter feed is working (non-blocking)');
-      for (const symbol of allActiveSymbols.slice(0, 1)) { // Just do the first symbol
-        // Fire-and-forget, with error logging
-        simpleTwitterService.forceTweet(symbol)
-          .then(() => console.log(`Initial tweet for ${symbol} forced successfully in background.`))
-          .catch(error => console.error(`Error forcing initial tweet for ${symbol} in background:`, error instanceof Error ? error.message : String(error)));
-      }
-      
-      // Get the status of tweet generation
-      const twitterServiceStatus = simpleTwitterService.getStatus();
-      
-      // Get updated status after operation
-      const twitterStatus = twitterPublisherService.getConnectionStatus();
-      
-      // Log the complete status for debugging
-      console.log("Twitter feed started with status:", {
-        publisherStatus: twitterStatus,
-        serviceStatus: twitterServiceStatus,
-        connected: isConnected,
-        feedActive: twitterStatus.feedActive,
-        activeSymbols: twitterServiceStatus.activeSymbols
-      });
-      
-      // Get updated status from all services for response
-      const standaloneServiceStatus = standaloneTwitterService.getStatus();
-      
-      // Combined success status from both Twitter services - now primarily based on publisherServiceSuccess
-      const overallSuccess = publisherServiceSuccess; // standaloneResult is no longer awaited
-      
-      // Extended status object for complete info
-      const statusObject = {
-        connected: isConnected,
-        feedActive: twitterStatus.feedActive,
-        simpleTwitterService: {
-          enabled: twitterServiceStatus.enabled,
-          activeSymbols: twitterServiceStatus.activeSymbols,
-          frequency: twitterServiceStatus.frequency,
-          frequencyMs: twitterServiceStatus.frequencyMs || (twitterServiceStatus.frequency ? twitterServiceStatus.frequency * 1000 : undefined)
-        },
-        standaloneTwitterService: {
-          enabled: standaloneServiceStatus.enabled,
-          activeSymbols: standaloneServiceStatus.activeSymbols,
-          frequency: standaloneServiceStatus.frequency,
-          frequencyMs: standaloneServiceStatus.frequencyMs || (standaloneServiceStatus.frequency ? standaloneServiceStatus.frequency * 1000 : undefined)
-        },
-        tweetFrequency: frequency,
-        tweetFrequencyMs: milliseconds,
-        requestedSymbols: symbols.length,
-        totalActiveSymbols: allActiveSymbols.length,
-        includesWildcardStocks: includeWildcardStocks
-      };
-      
-      // Log the complete status for debugging
-      console.log("Twitter feed final status:", JSON.stringify(statusObject, null, 2));
-      
-      // Return appropriate response with enhanced frequency information
-      return res.status(200).json({
-        success: overallSuccess,
-        message: overallSuccess 
-          ? isConnected 
-            ? `Twitter publisher started for ${allActiveSymbols.length} symbols. Auxiliary services initializing.` 
-            : `Twitter publisher activated for ${allActiveSymbols.length} symbols (will publish when connected). Auxiliary services initializing.`
-          : "Failed to start main Twitter publisher",
-        status: statusObject,
-        serviceStatus: twitterServiceStatus,
-        feedActive: twitterStatus.feedActive, // Explicitly include feedActive for frontend compatibility
-        activeSymbols: allActiveSymbols,
-        frequency: frequency,
-        frequencyMs: milliseconds
-      });
-    } catch (error) {
-      console.error("Error starting Twitter feed:", error);
-      return res.status(500).json({ success: false, message: "Internal server error" });
-    }
-  });
-  
-  app.post("/api/twitter-feed/stop", async (req: Request, res: Response) => {
-    try {
-      // Get initial status to determine if feed is already stopped
-      const initialStatus = twitterPublisherService.getConnectionStatus();
-      
-      // Get current active symbols before stopping
-      const previousActiveSymbols = simpleTwitterService.getStatus().activeSymbols || [];
-      console.log(`Stopping Twitter feed with ${previousActiveSymbols.length} active symbols`);
-      
-      // Step 1: First stop all tweet generation through the Simple Twitter Service
-      console.log("Stopping all tweet generation through SimpleTwitterService");
-      simpleTwitterService.stopAllTweets();
-      
-      // Step 2: Clear the active symbols list to ensure a clean state
-      console.log("Clearing active symbols list");
-      simpleTwitterService.setActiveSymbols([]);
-      
-      // Step 3: Also disable the simple Twitter service
-      console.log("Disabling SimpleTwitterService");
-      await simpleTwitterService.setEnabled(false);
-      
-      // Step 4: Also stop the standalone Twitter service
-      console.log("Stopping StandaloneTwitterService");
-      standaloneTwitterService.stopAllTweets();
-      
-      // Step 5: Stop the Twitter publisher feed
-      console.log("Stopping Twitter publisher feed");
-      const result = twitterPublisherService.stopFeed(); // No longer async
-      
-      // Get updated status after operation
-      const twitterStatus = twitterPublisherService.getFeedStatus();
-
-      // Get the status of tweet generation after stopping
-      const twitterServiceStatus = simpleTwitterService.getStatus();
-      console.log("Twitter service status after stopping:", twitterServiceStatus);
-      
-      return res.status(200).json({
-        message: result ? "Twitter feed stopped successfully" : "Failed to stop Twitter feed",
-        previousActiveSymbols,
-        twitterStatus,
-        serviceStatus: twitterServiceStatus,
-        feedActive: twitterStatus.active // Explicitly include feedActive for frontend compatibility
-      });
-    } catch (error) {
-      console.error("Error stopping Twitter feed:", error);
-      return res.status(500).json({ success: false, message: "Internal server error" });
-    }
-  });
-
-  // Force a tweet for testing purposes, but only for stocks in the current display
-  app.post("/api/twitter-feed/force-tweet", async (req: Request, res: Response) => {
-    try {
-      const { symbol } = req.body;
-      
-      if (!symbol) {
-        return res.status(400).json({
-          success: false,
-          message: "Symbol is required"
-        });
-      }
-      
-      // Check if feed is active - don't allow force tweet if feed is not active
-      if (!twitterPublisherService.isFeedActive()) {
-        console.log(`Cannot force tweet - Twitter feed is not active`);
-        return res.status(400).json({
-          success: false,
-          message: "Cannot force tweet: Twitter feed is not active. Please start the feed first.",
-          symbol,
-          twitterStatus: twitterPublisherService.getConnectionStatus()
-        });
-      }
-      
-      // Get the currently active symbols in the Twitter feed
-      const simpleTwitterStatus = simpleTwitterService.getStatus();
-      const activeSymbols = simpleTwitterStatus.activeSymbols || [];
-      
-      // Verify that the requested symbol is actually in the list of displayed stocks
-      // Only allow force tweets for stocks that are actually being displayed
-      if (!activeSymbols.includes(symbol)) {
-        console.log(`Cannot force tweet for ${symbol} - not in active symbols list: ${activeSymbols.join(', ')}`);
-        return res.status(400).json({
-          success: false,
-          message: `Cannot force tweet for ${symbol}: This stock is not currently displayed in the dashboard.`,
-          symbol,
-          activeSymbols,
-          twitterStatus: twitterPublisherService.getConnectionStatus()
-        });
-      }
-      
-      // Force a tweet generation and publication
-      console.log(`Forcing tweet generation and publication for ${symbol}`);
-      
-      // Enable simpleTwitterService temporarily if needed
-      if (!simpleTwitterStatus.enabled) {
-        console.log(`Temporarily enabling SimpleTwitterService for forced tweet`);
-        await simpleTwitterService.setEnabled(true);
-      }
-      
-      // Try with both services for redundancy
-      const success = await standaloneTwitterService.forceTweet(symbol as string);
-      const simpleSuccess = await simpleTwitterService.forceTweet(symbol as string);
-      
-      // If simpleTwitterService was disabled before, disable it again
-      if (!simpleTwitterStatus.enabled) {
-        console.log(`Restoring SimpleTwitterService to disabled state`);
-        await simpleTwitterService.setEnabled(false);
-      }
-      
-      if (success) {
-        console.log(`✓ Successfully published tweet for ${symbol}`);
-        res.json({
-          success: true,
-          message: `Successfully published tweet for ${symbol}`,
-          symbol,
-          twitterStatus: twitterPublisherService.getConnectionStatus()
-        });
-      } else {
-        console.error(`Failed to publish tweet for ${symbol}`);
-        res.status(500).json({
-          success: false,
-          message: `Failed to publish tweet for ${symbol}`,
-          symbol,
-          twitterStatus: twitterPublisherService.getConnectionStatus()
-        });
-      }
-    } catch (error) {
-      console.error("Error forcing tweet:", error);
-      res.status(500).json({
-        success: false,
-        message: error instanceof Error ? error.message : "Failed to force tweet"
-      });
-    }
-  });
-
-  // Add a dedicated endpoint for Twitter feed management independent of Solace connection
-  /**
-   * API endpoint to update active symbols for Twitter feed
-   * This is used to sync with wildcard filters when stocks are added/removed dynamically
-   * FIXED: Now accepts and stores symbols regardless of feed status
-   * ENHANCED: Better wildcard handling for exchange and country selections
-   */
-  app.post("/api/twitter-feed/update-symbols", async (req: Request, res: Response) => {
-    try {
-      const { symbols, wildcards } = req.body;
-      
-      // Validate the request
-      if (!symbols || !Array.isArray(symbols)) {
-        return res.status(400).json({
-          success: false,
-          message: "Valid symbols array is required"
-        });
-      }
-      
-      // Log detailed information for debugging
-      console.log(`API: Updating Twitter feed symbols: ${symbols.length} stocks`);
-      if (wildcards) {
-        console.log(`API: Request includes wildcard info:`, wildcards);
-      }
-      
-      // Get current status (whether active or not)
-      const status = twitterPublisherService.getFeedStatus();
-      
-      // Always update the active symbols, even if feed isn't active yet
-      // This way when the feed is later activated, it will have the correct symbols
-      const updated = twitterPublisherService.updateActiveSymbols(symbols);
-      
-      // Get updated status
-      const newStatus = twitterPublisherService.getFeedStatus();
-      
-      // Prepare appropriate message based on feed status
-      let message = '';
-      if (updated) {
-        if (status.active) {
-          message = `Successfully updated Twitter feed symbols (${newStatus.activeSymbols.length} active symbols)`;
-          console.log(`Twitter feed is ACTIVE - symbols were updated and tweets will be generated`);
-        } else {
-          message = `Successfully stored ${newStatus.activeSymbols.length} symbols for future Twitter feed activation`;
-          console.log(`Twitter feed is INACTIVE - symbols stored for future activation`);
-        }
-      } else {
-        message = "Failed to update Twitter feed symbols";
-        console.error(`Failed to update Twitter feed symbols`);
-      }
-      
-      return res.json({
-        success: updated,
-        message: message,
-        status: newStatus
-      });
-    } catch (error) {
-      console.error("Error updating Twitter feed symbols:", error);
-      return res.status(500).json({
-        success: false,
-        message: error instanceof Error ? error.message : "Unknown error occurred"
-      });
-    }
-  });
-
-  app.post("/api/twitter-feed/manage", async (req: Request, res: Response) => {
-    try {
-      // Parse and validate request
-      const { symbols, action, frequency = 60, frequencyMs } = req.body;
-      
-      // Calculate millisecond frequency - use explicit if provided, otherwise convert from seconds
-      const milliseconds = frequencyMs !== undefined ? frequencyMs : frequency * 1000;
-      
-      // If stopping the feed, don't require symbols
-      if (action === 'start' && (!symbols || !Array.isArray(symbols) || symbols.length === 0)) {
-        return res.status(400).json({
-          success: false,
-          message: "Valid symbols array is required when starting Twitter feed"
-        });
-      }
-      
-      if (!action || !['start', 'stop'].includes(action)) {
-        return res.status(400).json({
-          success: false,
-          message: "Valid action ('start' or 'stop') is required"
-        });
-      }
-      
-      // Determine tweet frequency (default to 60 seconds)
-      const tweetFrequency = parseInt(frequency?.toString() || '60', 10) || 60;
-      
-      // Get initial status to determine current feed state
-      const initialTwitterStatus = twitterPublisherService.getConnectionStatus();
-      
-      if (action === 'start') {
-        // Get current status of all Twitter services
-        const initialPublisherStatus = twitterPublisherService.getConnectionStatus();
-        const initialSimpleStatus = simpleTwitterService.getStatus();
-        
-        console.log("Current Twitter service status before starting:", {
-          publisherStatus: initialPublisherStatus,
-          simpleStatus: initialSimpleStatus
-        });
-        
-        // Track these symbols for Twitter feed - even if not activated yet
-        console.log(`Setting up tracking for Twitter feed symbols: ${symbols.join(', ')}`);
-        symbols.forEach((symbol: string) => {
-          // Add to tracking regardless of whether feed is active
-          console.log(`Tracking symbol ${symbol} for Twitter feed (NOT automatically starting - user must manually activate)`);
-        });
-        
-        // Step 1: First enable SimpleTwitterService (must be done before other operations)
-        console.log("Enabling SimpleTwitterService for tweet generation");
-        await simpleTwitterService.setEnabled(true);
-        
-        // Step 2: Set the tweet frequency on all services
-        console.log(`Setting tweet frequency to ${tweetFrequency} seconds (${tweetFrequency * 1000}ms) on all Twitter services`);
-        
-        // Convert to milliseconds for more precise control
-        const frequencyMs = tweetFrequency * 1000;
-        
-        // Set frequency in seconds for backwards compatibility
-        simpleTwitterService.setFrequency(tweetFrequency);
-        standaloneTwitterService.setFrequency(tweetFrequency);
-        
-        // Use millisecond precision for the TwitterPublisherService
-        await twitterPublisherService.setTweetFrequencyMs(frequencyMs);
-        
-        // Step 3: Use the exact symbols provided by frontend
-        let allActiveSymbols = [...symbols];
-        const includeWildcardStocks = req.body.includeWildcardStocks !== false; // Default to true
-        
-        // If includeWildcardStocks flag is true, include only the stocks that the frontend tells us are visible
-        if (includeWildcardStocks) {
-          try {
-            console.log("Using exact stock list provided by frontend which includes wildcard-visible stocks");
-            
-            // The frontend should send us the complete list of all stocks visible in the data table
-            // Including both individually selected stocks and those visible due to wildcards
-            console.log(`Frontend provided ${symbols.length} visible stocks: ${symbols.join(', ')}`);
-            
-            // Log the symbols we're going to use - no need to add any more
-            console.log(`Using exactly the frontend-provided symbols for Twitter feed: ${allActiveSymbols.length} stocks`);
-          } catch (error) {
-            console.error("Error handling wildcard-visible stocks:", error);
-            // Continue with original symbols list if there's an error
-          }
-        }
-        
-        // Step 4: Start the Twitter publisher feed (activation) with wildcard-aware symbol list
-        console.log(`Starting Twitter publisher feed for ${allActiveSymbols.length} symbols: ${allActiveSymbols.join(', ')}`);
-        
-        // Use platform-specific activation for better macOS support
-        try {
-          // Try to import the macOS compatibility module (dynamic import)
-          const macosModule = await import('./macos-compatibility');
-          
-          // Check if we're on macOS using the enhanced detection
-          const isMacOSPlatform = macosModule.isMacOS();
-          console.log(`Platform detection: ${isMacOSPlatform ? 'macOS detected' : 'Not macOS'}`);
-          
-          if (isMacOSPlatform) {
-            console.log("Using enhanced macOS feed activation sequence");
-            
-            // First try regular activation
-            await twitterPublisherService.startFeed(allActiveSymbols, tweetFrequency);
-            
-            // Then apply macOS-specific enhancement
-            const macOSActivated = await macosModule.enableMacOSTwitterFeed(twitterPublisherService);
-            console.log(`macOS feed activation result: ${macOSActivated ? 'SUCCESS' : 'FAILED'}`);
-            
-            // Force update the symbols again for macOS
-            twitterPublisherService.updateActiveSymbols(allActiveSymbols);
-          } else {
-            // Standard activation for non-macOS
-            await twitterPublisherService.startFeed(allActiveSymbols, tweetFrequency);
-          }
-        } catch (error) {
-          console.error("Error in platform-specific activation:", error);
-          // Fallback to standard activation
-          await twitterPublisherService.startFeed(allActiveSymbols, tweetFrequency);
-        }
-        
-        // Step 5: Use new setActiveSymbols method for better synchronization
-        console.log(`Setting active symbols for tweet generation: ${allActiveSymbols.join(', ')}`);
-        simpleTwitterService.setActiveSymbols(allActiveSymbols);
-        
-        // Then StandaloneTwitterService (fallback) - using older simulation method
-        console.log(`Starting tweet generation in StandaloneTwitterService for symbols: ${allActiveSymbols.join(', ')}`);
-        const standaloneResult = await standaloneTwitterService.startSimulation(allActiveSymbols, tweetFrequency);
-        
-        // Get updated status from all services
-        const twitterPublisherStatus = twitterPublisherService.getConnectionStatus();
-        const simpleTwitterStatus = simpleTwitterService.getStatus();
-        const standaloneTwitterStatus = standaloneTwitterService.getStatus();
-        
-        // Log detailed status for debugging
-        console.log("Twitter feed started with status:", {
-          publisherStatus: twitterPublisherStatus,
-          simpleStatus: simpleTwitterStatus,
-          standaloneStatus: standaloneTwitterStatus,
-          standaloneResult: standaloneResult,
-          feedActive: twitterPublisherStatus.feedActive,
-          simpleEnabled: simpleTwitterStatus.enabled,
-          standaloneEnabled: true
-        });
-        
-        // Combine statuses for response
-        const status = {
-          ...standaloneTwitterStatus,
-          simple: simpleTwitterStatus,
-          twitterPublisher: twitterPublisherStatus,
-          requestedSymbols: symbols.length,
-          totalActiveSymbols: allActiveSymbols.length,
-          includesWildcardStocks: includeWildcardStocks
-        };
-        
-        res.json({ 
-          success: true,
-          message: `Twitter feed started for ${allActiveSymbols.length} symbols with ${tweetFrequency}s frequency`,
-          status,
-          activeSymbols: allActiveSymbols
-        });
-      } else if (action === 'stop') {
-        // Get current status of all Twitter services
-        const initialPublisherStatus = twitterPublisherService.getConnectionStatus();
-        const initialSimpleStatus = simpleTwitterService.getStatus();
-        const initialStandaloneStatus = standaloneTwitterService.getStatus();
-        
-        console.log("Current Twitter service status before stopping:", {
-          publisherStatus: initialPublisherStatus,
-          simpleStatus: initialSimpleStatus,
-          standaloneStatus: initialStandaloneStatus
-        });
-        
-        // Step 1: Stop the tweet generation based on symbols parameter
-        if (symbols.length === 0) {
-          // If no symbols specified, stop ALL tweet generation
-          console.log("Stopping ALL tweet generation in all Twitter services");
-          
-          // Stop SimpleTwitterService (most important)
-          console.log("Stopping all tweets in SimpleTwitterService");
-          simpleTwitterService.stopAllTweets();
-          
-          // Stop StandaloneTwitterService (fallback)
-          console.log("Stopping all tweets in StandaloneTwitterService");
-          standaloneTwitterService.stopAllSimulation();
-          
-          // Also disable the SimpleTwitterService completely
-          console.log("Disabling SimpleTwitterService since all tweets are stopped");
-          await simpleTwitterService.setEnabled(false);
-          
-          // Finally stop the Twitter publisher feed completely
-          console.log("Stopping Twitter publisher feed completely");
-          await twitterPublisherService.stopFeed();
-        } else {
-          // Stop tweet generation only for the specified symbols
-          console.log(`Stopping tweet generation for symbols: ${symbols.join(', ')}`);
-          
-          // Get the list of active symbols before we stop anything
-          const simpleStatus = simpleTwitterService.getStatus();
-          const currentActive = simpleStatus.activeSymbols || [];
-          
-          // Calculate the new active symbols list by removing the specified symbols
-          const remainingActive = currentActive.filter((s: string) => !symbols.includes(s));
-          
-          // Use the enhanced setActiveSymbols method to update the active symbols list
-          console.log(`Updating active symbols for tweet generation: ${remainingActive.join(', ')}`);
-          simpleTwitterService.setActiveSymbols(remainingActive);
-          
-          // Also stop in StandaloneTwitterService for compatibility (fallback)
-          console.log(`Stopping tweets for symbols in StandaloneTwitterService: ${symbols.join(', ')}`);
-          standaloneTwitterService.stopSimulation(symbols);
-          
-          if (remainingActive.length === 0) {
-            // If no symbols remain active, stop the feed completely
-            console.log("No symbols remain active, stopping Twitter publisher feed completely");
-            await twitterPublisherService.stopFeed();
-          } else {
-            // Otherwise update the feed with the remaining symbols
-            console.log(`Updating Twitter publisher feed to only include remaining symbols: ${remainingActive.join(', ')} with frequency ${tweetFrequency}s (${tweetFrequency * 1000}ms)`);
-            
-            // Convert to milliseconds for more precise control
-            const frequencyMs = tweetFrequency * 1000;
-            
-            // First update with seconds-based frequency for backward compatibility
-            await twitterPublisherService.startFeed(remainingActive, tweetFrequency);
-            
-            // Then ensure millisecond precision is set
-            await twitterPublisherService.setTweetFrequencyMs(frequencyMs);
-          }
-        }
-        
-        // Get updated status from all services
-        const twitterPublisherStatus = twitterPublisherService.getConnectionStatus();
-        const simpleTwitterStatus = simpleTwitterService.getStatus();
-        const standaloneTwitterStatus = standaloneTwitterService.getStatus();
-        
-        // Log detailed status for debugging
-        console.log("Twitter feed stopped with status:", {
-          publisherStatus: twitterPublisherStatus,
-          simpleStatus: simpleTwitterStatus,
-          standaloneStatus: standaloneTwitterStatus,
-          feedActive: twitterPublisherStatus.feedActive,
-          simpleEnabled: simpleTwitterStatus.enabled
-        });
-        
-        // Combine statuses for response
-        const status = {
-          ...standaloneTwitterStatus,
-          simple: simpleTwitterStatus,
-          twitterPublisher: twitterPublisherStatus
-        };
-        
-        res.json({
-          success: true,
-          message: `Twitter feed stopped for ${symbols.length} symbols`,
-          status
-        });
-      }
-    } catch (error) {
-      console.error("Error managing Twitter feeds:", error);
-      res.status(500).json({
-        success: false,
-        message: error instanceof Error ? error.message : "Failed to manage Twitter feeds"
-      });
-    }
-  });
 
   // Start data simulation
   app.post("/api/simulation/start", async (req: Request, res: Response) => {
@@ -3245,26 +2346,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
         }
       }
       
-      // Do NOT automatically start Twitter feed simulation - only track the symbols
-      if (subscription.twitterFeed && symbols.length > 0) {
-        try {
-          // Only track symbols for Twitter feed without starting the simulation
-          console.log(`Tracking symbols for Twitter feed (NOT starting): ${symbols.join(', ')}`);
-          
-          // Set frequency for when user decides to start the feed (60 seconds between tweets)
-          standaloneTwitterService.setFrequency(60);
-          simpleTwitterService.setFrequency(60); // This is still synchronous
-          
-          // The user must explicitly start the Twitter feed via the dedicated button
-          responseMessage += `Twitter feed symbols tracked but NOT started. User must activate manually. `;
-          
-          // Log current Twitter service status
-          console.log("Twitter service status:", JSON.stringify(standaloneTwitterService.getStatus(), null, 2));
-        } catch (error) {
-          console.error("Error tracking Twitter feed symbols:", error);
-          responseMessage += "Error tracking Twitter feed symbols. ";
-        }
-      }
+      // Twitter feed is now browser-native via TrafficGeneratorPanel
+      // No backend tracking needed
       
       // Build final success message
       let finalMessage = responseMessage || "Simulation started successfully";
@@ -3291,59 +2374,24 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Stop data simulation
   app.post("/api/simulation/stop", async (req: Request, res: Response) => {
     try {
-      let stopTwitterFeed = false;
-      let specificSymbols: string[] = [];
-      
-      // Check if we should stop Twitter feed too
-      if (req.body) {
-        if (req.body.stopTwitterFeed === true) {
-          stopTwitterFeed = true;
-        }
-        
-        // Allow stopping specific symbols
-        if (req.body.symbols && Array.isArray(req.body.symbols)) {
-          specificSymbols = req.body.symbols;
-        }
-      }
-      
       // Stop market data simulation (always)
       await marketDataService.stopSimulation();
       
       // Stop LLM service if running
       await llmService.stopSignalGeneration();
       
-      // Optionally stop Twitter feed for all or specific symbols
-      if (stopTwitterFeed) {
-        if (specificSymbols.length > 0) {
-          console.log(`Stopping Twitter feed for specific symbols: ${specificSymbols.join(', ')}`);
-          standaloneTwitterService.stopSimulation(specificSymbols);
-        } else {
-          console.log('Stopping all Twitter feeds');
-          standaloneTwitterService.stopAllTweets(); // Stop all if no symbols specified
-        }
-      }
+      // Twitter feed is now browser-native via TrafficGeneratorPanel
       
-      // Return result with information about what was stopped
-      const twitterActiveSymbols = Object.keys(standaloneTwitterService.getStatus().details);
       res.json({
         success: true,
-        message: `Simulation stopped successfully. ${twitterActiveSymbols.length > 0 ? 
-          `${twitterActiveSymbols.length} Twitter feeds still active` : 
-          'All simulations stopped'}.`,
-        twitterFeedActive: twitterActiveSymbols.length > 0,
-        activeTwitterSymbols: twitterActiveSymbols
+        message: 'Simulation stopped successfully.'
       });
-      
-      // Log Twitter metrics
-      console.log("Twitter service status:", JSON.stringify(standaloneTwitterService.getStatus(), null, 2));
     } catch (error) {
       res.status(500).json({ 
         message: error instanceof Error ? error.message : "Failed to stop simulation" 
       });
     }
   });
-  
-  // Note: Twitter feed functionality has been removed
 
   // Get market data for specified symbols
   app.get("/api/market-data", async (req: Request, res: Response) => {

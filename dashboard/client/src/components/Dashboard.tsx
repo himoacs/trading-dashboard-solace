@@ -1797,204 +1797,23 @@ export default function Dashboard() {
   
   /**
    * Update the Twitter feed active symbols based on currently visible stocks
-   * This syncs the Twitter publisher with stocks that might come from wildcards
-   * Always update the symbol list regardless of feed status so it's ready when feed is activated
+   * Twitter feed is now browser-native via TrafficGeneratorPanel.
+   * This legacy function is kept as a no-op for compatibility.
    */
   const updateTwitterFeedSymbols = async () => {
-    // We'll still try to update even if disconnected - symbols will be stored for later activation
-    if (!connected) {
-      console.log('Warning: Updating Twitter feed symbols while disconnected - changes will be queued for reconnection');
-    }
-
-    try {
-      // Get visible stocks by directly using displayStockData
-      // This ensures we include stocks from both direct selection and wildcard filters
-      const visibleStocks = displayStockData ? displayStockData : [];
-      
-      const activeSymbols = visibleStocks.map(stock => stock.symbol);
-      
-      if (twitterStatus?.feedActive) {
-        console.log(`Updating active Twitter feed with ${activeSymbols.length} visible symbols:`, activeSymbols);
-      } else {
-        console.log(`Storing ${activeSymbols.length} symbols for future Twitter feed activation:`, activeSymbols);
-      }
-      
-      if (activeSymbols.length === 0) {
-        console.log('No visible stocks to update Twitter feed with');
-        return;
-      }
-      
-      // Include wildcard information to help server better manage topics
-      console.log(`Sending update with wildcards - Exchanges: ${selectedExchanges.join(', ')}, Countries: ${selectedCountries.join(', ')}`);
-      
-      // Call the API endpoint to update active symbols with retry logic
-      const maxRetries = 3;
-      let retryCount = 0;
-      let success = false;
-      
-      while (retryCount < maxRetries && !success) {
-        try {
-          const response = await fetch('/api/twitter-feed/update-symbols', {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json'
-            },
-            body: JSON.stringify({
-              symbols: activeSymbols,
-              wildcards: {
-                exchanges: selectedExchanges,
-                countries: selectedCountries
-              }
-            })
-          });
-          
-          if (!response.ok) {
-            const errorText = await response.text();
-            console.error(`Failed to update Twitter feed symbols (attempt ${retryCount + 1}/${maxRetries}):`, errorText);
-            retryCount++;
-            
-            if (retryCount < maxRetries) {
-              console.log(`Retrying in ${retryCount * 1000}ms...`);
-              await new Promise(resolve => setTimeout(resolve, retryCount * 1000));
-            }
-          } else {
-            const result = await response.json();
-            success = true;
-            console.log('Twitter feed symbols updated successfully:', result);
-          }
-        } catch (error) {
-          console.error(`Error during Twitter feed update attempt ${retryCount + 1}:`, error);
-          retryCount++;
-          
-          if (retryCount < maxRetries) {
-            console.log(`Retrying in ${retryCount * 1000}ms after error...`);
-            await new Promise(resolve => setTimeout(resolve, retryCount * 1000));
-          }
-        }
-      }
-      
-      if (!success) {
-        console.error(`Failed to update Twitter feed symbols after ${maxRetries} attempts`);
-      }
-    } catch (error) {
-      console.error('Error in Twitter feed symbol update process:', error);
-    }
+    // Twitter feed is now browser-native via TrafficGeneratorPanel
+    // No backend sync needed
+    console.log('Note: Twitter feed is now browser-native via TrafficGeneratorPanel');
   };
   
-  // Add a useEffect to keep Twitter feed symbols in sync with exchange/country filters
-  useEffect(() => {
-    // When exchanges or countries change, we need to update the Twitter feed symbols
-    // to ensure new stocks added through wildcards are included
-    if (twitterStatus?.feedActive) {
-      console.log('Exchange or country filters changed, updating Twitter feed symbols');
-      updateTwitterFeedSymbols();
-    }
-  }, [selectedExchanges, selectedCountries, twitterStatus?.feedActive]);
-  
-  // Monitor connection state to ensure Twitter feed symbols are updated on reconnection
-  useEffect(() => {
-    // When the connection state changes to connected, update Twitter feed symbols
-    if (connected && twitterStatus?.feedActive) {
-      console.log('Connection established or restored while Twitter feed is active, syncing symbols');
-      updateTwitterFeedSymbols();
-    }
-  }, [connected, twitterStatus?.feedActive]);
-  
-  // Monitor displayStockData to ensure Twitter feed symbols stay in sync with visible stocks
-  // This is especially important when wildcard subscriptions bring in new stocks
-  useEffect(() => {
-    // Only update if feed is active and we have displayed stocks
-    if (twitterStatus?.feedActive && displayStockData && displayStockData.length > 0) {
-      // Use a debounce approach to avoid too many rapid updates
-      const timer = setTimeout(() => {
-        console.log('Display stock data changed while Twitter feed is active, syncing symbols');
-        updateTwitterFeedSymbols();
-      }, 1000); // Delay by 1 second to batch rapid changes
-      
-      return () => clearTimeout(timer);
-    }
-  }, [displayStockData, twitterStatus?.feedActive]);
-  
-  // Handler for forcing a Twitter tweet with improved validation
+  // Handler for forcing a Twitter tweet (now browser-native)
   const handleForceTweet = async (symbol: string) => {
-    if (!connected) {
-      toast({
-        title: 'Connection Required',
-        description: 'Please connect to Solace before generating tweets',
-        variant: 'destructive'
-      });
-      return;
-    }
-    
-    // Check if the symbol is in our visible stocks (including those added via wildcards)
-    // This is more accurate than just checking selectedStocks
-    const isVisible = displayStockData?.some(s => s.symbol === symbol) || false;
-    
-    if (!isVisible) {
-      toast({
-        title: 'Stock Not Displayed',
-        description: `Stock ${symbol} is not displayed in the data table. Please ensure it's visible before generating tweets.`,
-        variant: 'destructive'
-      });
-      return;
-    }
-    
-    try {
-      console.log(`Forcing tweet generation for symbol: ${symbol}`);
-      
-      // First, ensure the Twitter service is enabled
-      const enableResponse = await fetch('/api/twitter-feed/manage', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-          action: 'start',
-          symbols: [symbol],
-          frequency: 60
-        })
-      });
-      
-      if (!enableResponse.ok) {
-        console.warn("Warning: Twitter service may not be fully enabled:", await enableResponse.text());
-      }
-      
-      // Call API endpoint to force a tweet
-      const response = await fetch('/api/twitter-feed/force-tweet', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({ symbol })
-      });
-      
-      if (response.ok) {
-        const data = await response.json();
-        
-        toast({
-          title: 'Tweet Generated',
-          description: `A new tweet for ${symbol} has been generated and published`
-        });
-        
-        // The tweet will come back through the WebSocket
-        setLastUpdated(new Date());
-        
-        // Log the response for debugging
-        console.log('Force tweet response:', data);
-      } else {
-        const errorData = await response.json();
-        throw new Error(errorData.message || 'Failed to generate tweet');
-      }
-    } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : String(error);
-      console.error('Error forcing tweet:', errorMessage);
-      
-      toast({
-        title: 'Error Generating Tweet',
-        description: errorMessage || 'Failed to generate tweet',
-        variant: 'destructive'
-      });
-    }
+    // Twitter feed is now browser-native via TrafficGeneratorPanel
+    // This function is kept for compatibility but shows a notification
+    toast({
+      title: 'Use Traffic Generator',
+      description: 'Twitter feed is now controlled via the Traffic Generator panel in the sidebar.',
+    });
   };
   
   // Handle bulk stock selection change from ConfigPanel

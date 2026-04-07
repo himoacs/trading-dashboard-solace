@@ -327,146 +327,47 @@ export function useSolaceConnectionStatus() {
     }
   });
 
+  // Twitter feed is now browser-native via TrafficGeneratorPanel
+  // These mutations are kept as no-ops for compatibility
   const startTwitterFeed = useMutation<StartFeedResponse, Error, TwitterStartParams | void>({
-    mutationFn: async (variables?: TwitterStartParams | void) => {
-      const actualParams = variables || {};
-      const response = await fetch('/api/twitter-feed/start', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-          symbols: actualParams.symbols || ['AAPL', 'MSFT', 'AMZN', 'GOOG'],
-          frequency: actualParams.frequency || 10
-        })
+    mutationFn: async () => {
+      // Twitter feed is now browser-native
+      toast({ 
+        title: "Use Traffic Generator", 
+        description: "Twitter feed is now controlled via the Traffic Generator panel in the sidebar." 
       });
-      
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.message || 'Failed to start Twitter feed');
-      }
-      
-      return response.json();
+      return { success: true, message: "Twitter feed is now browser-native" } as StartFeedResponse;
     },
-    onSuccess: (data) => {
-      console.log("Twitter feed start succeeded, invalidating queries", data);
-      console.log("Twitter feed start response feedActive:", data.feedActive);
-      console.log("Twitter feed start response twitterStatus:", data.twitterStatus);
-      
-      setTimeout(() => refetch(), 100);
-      queryClient.invalidateQueries({ queryKey: ['/api/solace/status'] });
-    },
-    onError: (error) => {
-      console.error("Twitter feed start failed:", error);
+    onSuccess: () => {
+      console.log("Twitter feed is now browser-native via TrafficGeneratorPanel");
     }
   });
 
   const stopTwitterFeed = useMutation<StopTwitterFeedResponse, Error, void>({
     mutationFn: async () => {
-      const response = await fetch('/api/twitter-feed/stop', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json'
-        }
+      // Twitter feed is now browser-native
+      toast({ 
+        title: "Use Traffic Generator", 
+        description: "Twitter feed is now controlled via the Traffic Generator panel in the sidebar." 
       });
-      
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.message || 'Failed to stop Twitter feed');
-      }
-      
-      return response.json();
+      return { success: true, message: "Twitter feed is now browser-native", twitterStatus: defaultStatus } as StopTwitterFeedResponse;
     },
-    onSuccess: (data: StopTwitterFeedResponse) => {
-      console.log("Twitter feed stop succeeded.", data);
-      queryClient.setQueryData<SolaceStatusResponse>(['/api/solace/status'], (oldQueryData) => {
-        if (oldQueryData) {
-          return {
-            ...oldQueryData,
-            twitterStatus: {
-              ...(oldQueryData.twitterStatus || defaultStatus),
-              ...data.twitterStatus,
-              feedActive: data.twitterStatus.feedActive,
-            },
-          };
-        }
-        return oldQueryData;
-      });
-      queryClient.invalidateQueries({ queryKey: ['/api/solace/status'] });
-      toast({ title: "Twitter Feed", description: "Twitter feed stopped." });
-    },
-    onError: (error) => {
-      console.error("Twitter feed stop failed:", error);
+    onSuccess: () => {
+      console.log("Twitter feed is now browser-native via TrafficGeneratorPanel");
     }
   });
 
   const updateTwitterFeedOptions = useMutation<UpdateTwitterOptionsResponse, Error, UpdateOptionsParams>({
-    mutationFn: async (options: UpdateOptionsParams) => {
-      console.log("updateTwitterFeedOptions called with:", options);
-      // Ensure frequencyMs is sent if available, otherwise calculate from frequency
-      const payload = {
-        ...options,
-        frequencyMs: options.frequencyMs ?? (options.frequency ? options.frequency * 1000 : undefined)
-      };
-      // Remove frequency if frequencyMs is present, as backend prioritizes frequencyMs
-      if (payload.frequencyMs && payload.frequency) {
-        delete payload.frequency;
-      }
-
-      const response = await fetch('/api/twitter-feed/message-options', { // Corrected endpoint
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
+    mutationFn: async () => {
+      // Twitter feed is now browser-native
+      toast({ 
+        title: "Use Traffic Generator", 
+        description: "Twitter feed options are now controlled via the Traffic Generator panel." 
       });
-
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.message || 'Failed to update Twitter feed options');
-      }
-      return response.json(); // Expecting a response structure similar to UpdateMarketDataOptionsResponse 
-                              // but with `twitterStatus` instead of `publisherStatus`
+      return { success: true, message: "Twitter feed is now browser-native", twitterStatus: defaultStatus } as UpdateTwitterOptionsResponse;
     },
-    onSuccess: (data: UpdateTwitterOptionsResponse) => { // Explicitly type data here
-      toast({ title: "Twitter Feed", description: data.message || "Options updated." });
-      queryClient.setQueryData<SolaceStatusResponse>(['/api/solace/status'], (oldQueryData) => {
-        if (oldQueryData) {
-          if (!data.twitterStatus) {
-            return oldQueryData;
-          }
-
-          const oldTwitStatus = oldQueryData.twitterStatus || defaultStatus;
-          const newTwitStatusFromServer = data.twitterStatus;
-
-          const resolvedMessageOptions =
-            newTwitStatusFromServer.messageOptions // If new options exist from server
-            ? newTwitStatusFromServer.messageOptions // THEN use them
-            : oldTwitStatus.messageOptions; // ELSE (if server didn't send messageOptions) use old options
-
-          const resolvedFrequencyMs =
-            newTwitStatusFromServer.frequencyMs !== undefined && newTwitStatusFromServer.frequencyMs !== oldTwitStatus.frequencyMs
-            ? newTwitStatusFromServer.frequencyMs
-            : oldTwitStatus.frequencyMs;
-
-          const resolvedFrequency = resolvedFrequencyMs !== undefined ? Math.round(resolvedFrequencyMs / 1000) : oldTwitStatus.frequency;
-
-          const newData = {
-            ...oldQueryData,
-            twitterStatus: {
-              ...oldTwitStatus, // Base on old or default
-              ...newTwitStatusFromServer, // Overlay with whatever came from server
-              messageOptions: resolvedMessageOptions, // Explicitly set resolved stable messageOptions
-              frequencyMs: resolvedFrequencyMs, // Explicitly set resolved stable frequencyMs
-              frequency: resolvedFrequency, // Update frequency (seconds)
-            }
-          };
-          return newData;
-        }
-        return oldQueryData;
-      });
-      queryClient.invalidateQueries({ queryKey: ['/api/solace/status'] }); 
-    },
-    onError: (error: Error) => {
-      toast({ title: "Update Failed", description: error.message, variant: "destructive" });
+    onSuccess: () => {
+      console.log("Twitter feed options are now browser-native via TrafficGeneratorPanel");
     }
   });
 

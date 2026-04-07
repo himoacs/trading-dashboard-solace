@@ -176,10 +176,11 @@ function GeneratorCard({
               id={`${generatorId}-eliding`}
               checked={state.config.allowMessageEliding}
               onCheckedChange={handleElidingChange}
+              disabled={isActive}
             />
             <label
               htmlFor={`${generatorId}-eliding`}
-              className="text-sm text-muted-foreground cursor-pointer"
+              className={`text-sm cursor-pointer ${isActive ? 'text-muted-foreground/50' : 'text-muted-foreground'}`}
             >
               Allow Eliding
             </label>
@@ -189,10 +190,11 @@ function GeneratorCard({
               id={`${generatorId}-dmq`}
               checked={state.config.dmqEligible}
               onCheckedChange={handleDmqChange}
+              disabled={isActive}
             />
             <label
               htmlFor={`${generatorId}-dmq`}
-              className="text-sm text-muted-foreground cursor-pointer"
+              className={`text-sm cursor-pointer ${isActive ? 'text-muted-foreground/50' : 'text-muted-foreground'}`}
             >
               DMQ Eligible
             </label>
