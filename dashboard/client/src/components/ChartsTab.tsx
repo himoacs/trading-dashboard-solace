@@ -105,6 +105,9 @@ export default function ChartsTab({ liveStockData, availableStocks, selectedStoc
         timeVisible: true,
         secondsVisible: true,
         borderColor: 'rgba(255, 255, 255, 0.1)',
+        rightOffset: 10,
+        barSpacing: 6,
+        minBarSpacing: 2,
       },
       rightPriceScale: {
         borderColor: 'rgba(255, 255, 255, 0.1)',
@@ -239,6 +242,15 @@ export default function ChartsTab({ liveStockData, availableStocks, selectedStoc
               const series = seriesMapRef.current.get(stock.symbol);
               if (series) {
                 series.setData(newHistory);
+                // Set visible range to show approximately 2 minutes of data
+                if (chartRef.current && newHistory.length > 0) {
+                  const latestTime = newHistory[newHistory.length - 1].time as number;
+                  const twoMinutesInSeconds = 120;
+                  chartRef.current.timeScale().setVisibleRange({
+                    from: (latestTime - twoMinutesInSeconds) as Time,
+                    to: (latestTime + 10) as Time, // Add small buffer on right
+                  });
+                }
               }
             }
           }
