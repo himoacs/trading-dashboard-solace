@@ -12,6 +12,7 @@ import WildcardSubscriptionTest from "./tests/wildcard-subscription-test";
 import { useEffect, useState } from "react";
 import { useSolaceConnection } from "./hooks/useSolaceConnection";
 import { TrafficGeneratorProvider } from "./contexts/TrafficGeneratorContext";
+import ChatWidget from "./components/ChatWidget";
 
 function SolaceConnectionManager() {
   const { toast } = useToast();
@@ -127,6 +128,11 @@ function App() {
         <SolaceConnectionManager />
         <ThemeToggle className="fixed bottom-12 right-4 z-50" />
         <Router />
+        {/* Mounted here, not in Dashboard: chat goes to Agent Mesh over our own
+            backend, so it doesn't need Dashboard's Solace session and works
+            even when the broker connection panel is disconnected. Positions
+            itself above ThemeToggle (bottom-24) - see the component header. */}
+        <ChatWidget />
         <Toaster />
       </TrafficGeneratorProvider>
     </QueryClientProvider>

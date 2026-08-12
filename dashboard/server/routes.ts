@@ -16,6 +16,15 @@ import { marketDataService } from "./services/marketDataService";
 import { llmService } from "./services/llmService";
 // Import publisher services that use user-provided credentials
 import { publisherSolaceService } from "./services/publisherSolaceService";
+// Proxy to Agent Mesh's own chat API (CORS-blocked from the browser; see the
+// module header for why this hop exists).
+import {
+  createSession as createSamChatSession,
+  sendMessage as sendSamChatMessage,
+  getSessionMessages as getSamChatMessages,
+  SamPlatformError,
+  DEFAULT_AGENT_NAME as SAM_CHAT_DEFAULT_AGENT,
+} from "./services/samChatService";
 
 // Define MessageTypes if not already defined or imported (based on previous context)
 export const MessageTypes = {
@@ -2390,6 +2399,69 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.status(500).json({ 
         message: error instanceof Error ? error.message : "Failed to stop simulation" 
       });
+    }
+  });
+
+  // ---------------------------------------------------------------------------
+  // Agent Mesh chat proxy.
+  //
+  // Same-origin hop for the browser: Agent Mesh's chat API does not send CORS
+  // headers for this origin, so the widget cannot call it directly. See
+  // services/samChatService.ts for the verified request/response contracts.
+  //
+  // Sessions created here are REAL Agent Mesh sessions - the same ones the
+  // Agent Mesh Web UI lists - so multi-turn memory is the platform's, and a
+  // dashboard conversation can be inspected or continued there.
+  // ---------------------------------------------------------------------------
+
+  /** Starts a new chat session. Returns the id the other two routes need. */
+  app.post("/api/chat/session", async (_req: Request, res: Response) => {
+    try {
+      const sessionId = await createSamChatSession();
+      res.json({ sessionId, agentName: SAM_CHAT_DEFAULT_AGENT });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Failed to create chat session";
+      // 502: the failure is upstream (Agent Mesh), not a bad request from the
+      // browser - lets the widget say something more useful than "error".
+      res.status(error instanceof SamPlatformError ? 502 : 500).json({ message });
+    }
+  });
+
+  /** Sends one message and waits for the agent's reply. */
+  app.post("/api/chat/message", async (req: Request, res: Response) => {
+    try {
+      const { sessionId, message, agentName } = req.body ?? {};
+      if (typeof sessionId !== "string" || sessionId.trim() === "") {
+        return res.status(400).json({ message: "sessionId is required" });
+      }
+      if (typeof message !== "string" || message.trim() === "") {
+        return res.status(400).json({ message: "message is required" });
+      }
+
+      const reply = await sendSamChatMessage(
+        sessionId,
+        message,
+        typeof agentName === "string" && agentName.trim() !== "" ? agentName : undefined,
+      );
+      res.json({ reply });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Failed to send chat message";
+      res.status(error instanceof SamPlatformError ? 502 : 500).json({ message });
+    }
+  });
+
+  /**
+   * Full transcript for a session. Lets the widget restore a conversation after
+   * a page reload without keeping any history client-side - Agent Mesh is the
+   * source of truth for the conversation.
+   */
+  app.get("/api/chat/session/:sessionId/messages", async (req: Request, res: Response) => {
+    try {
+      const turns = await getSamChatMessages(req.params.sessionId);
+      res.json({ turns });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Failed to load chat history";
+      res.status(error instanceof SamPlatformError ? 502 : 500).json({ message });
     }
   });
 

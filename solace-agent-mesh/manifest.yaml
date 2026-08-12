@@ -27,10 +27,16 @@ resources:
   models:
     - general
     - cheap
+  # Read-only SQL access to the market-history database, for the historian agent.
+  # The market-history service is the only writer; this connector authenticates
+  # as a SELECT-only role so SAM cannot write even by accident.
+  connectors:
+    - market-history-connector
   agents:
     - trading-signal-agent
     - market-research-agent
     - verdict-reconciler-agent
+    - market-historian-agent
   workflows:
     - research-briefing-workflow
   entrypoints:

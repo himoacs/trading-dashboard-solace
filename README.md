@@ -4,10 +4,13 @@ A real-time trading dashboard that pairs **Solace PubSub+** (the broker) with **
 Mesh** (SAM — the AI layer). Live market data streams straight into the browser over Solace
 WebSockets; social-media chatter and "Research" clicks are picked up by SAM off the same broker,
 reasoned about by LLM-backed agents and a workflow, and the results are published right back onto
-it for the dashboard to render. No extra API layer between the AI and the UI — the broker is the
-only integration point.
+it for the dashboard to render — the broker is the only integration point for that whole path.
 
-Everything runs from one `docker compose up`: broker, Agent Mesh, and the dashboard.
+That live traffic is also recorded into Postgres by a separate, non-AI service, so a chat window in
+the dashboard can answer questions about **what already happened** — with the AI holding read-only
+database access, enforced by Postgres grants.
+
+Everything runs from one `docker compose up`: broker, database, Agent Mesh, recorder, and dashboard.
 
 This doc is written for someone opening the repo for the first time: how to run it, how to demo
 it, how the pieces talk to each other, and exactly which topics carry what.
@@ -28,18 +31,21 @@ it, how the pieces talk to each other, and exactly which topics carry what.
 
 ## What this demonstrates
 
-Two things at once, deliberately:
+Three things at once, deliberately:
 
 1. **The broker.** The dashboard's Traffic Generators publish directly from the browser
    (`solclientjs`) with real QoS knobs exposed in the UI — delivery mode, message eliding, DMQ
    eligibility — and the dashboard subscribes using topic wildcards across a hierarchy
    (`market-data/EQ/{country}/{exchange}/{symbol}`). It's a live playground for PubSub+ mechanics,
    not just a data feed.
-2. **Solace Agent Mesh.** Nothing calls an LLM over HTTP. Every AI step is triggered by a broker
-   event and publishes its result back onto the broker — an **entrypoint** maps topics to
-   **agents** and a **workflow**, and the workflow chains agents together with deterministic
-   business-rule gating in between. The dashboard is just another broker client; it never talks to
-   Agent Mesh directly.
+2. **Solace Agent Mesh.** The event-driven AI path never calls an LLM over HTTP: an **entrypoint**
+   maps broker topics to **agents** and a **workflow**, and each result is published back onto the
+   broker, so the dashboard renders it as just another subscriber. The **workflow** additionally
+   chains agents together with deterministic business-rule gating in between.
+3. **Asking questions of history.** A separate, non-AI service records broker traffic into
+   Postgres; an agent reads it (read-only, enforced by database grants) via SAM's SQL connector; and
+   a chat window in the dashboard's corner turns that into natural-language Q&A over **real Agent
+   Mesh chat sessions** — the same sessions its own Web UI lists.
 
 ## Quick start
 
@@ -74,14 +80,16 @@ cp .env.sample .env
 docker compose up
 ```
 
-That starts six services and needs no manual setup anywhere — no broker configuration, no
-clicking around the Agent Mesh UI:
+That starts eight services and needs no manual setup anywhere — no broker configuration, no
+database setup, no clicking around the Agent Mesh UI:
 
 | Service | What it is |
 |---|---|
 | `broker` | Solace PubSub+ Standard — the single broker every component shares |
+| `postgres` | the market-history database (schema + least-privilege roles created on first start) |
 | `agent-mesh` | Agent Mesh runtime (entrypoint executor, agents, workflow engine, all embedded) |
 | `sam-config` | one-shot: applies `solace-agent-mesh/` to the runtime, then exits |
+| `market-history` | records broker traffic into Postgres so history can be queried (non-AI) |
 | `client-usernames` | one-shot: provisions `demo`/`demo` and `sun`/`sun` on the broker via SEMP |
 | `queue-guardrail` | one-shot: caps a queue's backlog TTL via SEMP (see [Topic reference](#topic-reference)) |
 | `dashboard` | the React + Express dashboard |
@@ -115,8 +123,15 @@ clicking around the Agent Mesh UI:
    ordinary business logic, not the last word.
 7. Click the **Activity** icon in the header to deep-link into the Agent Mesh UI's Activities tab
    and show the actual agent/workflow tasks that just ran — proof this isn't a canned response.
-8. Optionally open <http://localhost:47801> directly and ask the Orchestrator something spanning
-   both agents, e.g. *"What's the latest signal on NVDA and what does your research say?"*
+8. Click the **chat bubble** in the bottom-right corner and ask about what just happened, e.g.
+   *"What symbols do you have data for?"*, *"What was NVDA's price range in the last 10 minutes?"*,
+   or *"How many Buy signals today, and did they agree with the tweets?"* The historian agent writes
+   SQL against the recorded history and answers in prose. Let the generators run a few minutes first
+   so there's something to talk about.
+9. Optionally open <http://localhost:47801> directly and ask the Orchestrator something spanning
+   both agents, e.g. *"What's the latest signal on NVDA and what does your research say?"* The chat
+   sessions you started in step 8 are listed there too — same sessions, so you can show the
+   dashboard conversation continuing inside Agent Mesh's own UI.
 
 > **Demo tip:** leave the Twitter Feed Publisher near its default 2 tweets/min. The slider goes much
 > higher, and while no messages are lost, each tweet costs one LLM call — crank it up and the
@@ -129,18 +144,23 @@ flowchart LR
     subgraph Browser["Browser"]
         UI["Dashboard UI"]
         TG["Traffic Generators<br/>Market Data · Twitter Feed<br/>(solclientjs, direct)"]
+        CW["Chat widget"]
     end
 
-    Backend["Express backend<br/>serves the built UI · not in the real-time hot path"]
+    Backend["Express backend<br/>serves the built UI · /api/chat/* proxy"]
 
     subgraph Broker["Solace PubSub+ broker"]
         Topics["market-data/* · twitter-feed/*<br/>signal/* · research/*"]
     end
 
+    MH["market-history<br/>(non-AI recorder)"]
+    PG[("Postgres<br/>price_ticks · tweets · signals")]
+
     subgraph SAM["Solace Agent Mesh runtime"]
         EP["market-events entrypoint<br/>(event_rules: topic -> agent/workflow)"]
         A1["trading-signal-agent"]
         WF["research-briefing-workflow<br/>(market-research-agent +<br/>verdict-reconciler-agent +<br/>business-rule gate)"]
+        HA["market-historian-agent<br/>(sql connector)"]
     end
 
     LLM[["LLM endpoint<br/>(OpenAI-compatible)"]]
@@ -155,7 +175,19 @@ flowchart LR
     WF -- "publish research/response/*, research/error/*" --> Broker
     A1 -. LLM call .-> LLM
     WF -. LLM calls .-> LLM
+
+    Broker -- "market-data/&gt;, twitter-feed/&gt;, signal/&gt;" --> MH
+    MH -- "INSERT (writer role)" --> PG
+    PG -- "SELECT only (reader role)" --> HA
+    CW -- "fetch /api/chat/*" --> Backend
+    Backend -- "session API (HTTP)" --> HA
+    HA -. LLM call .-> LLM
 ```
+
+Note the two distinct AI paths: signals and research travel **over the broker** (event-driven,
+fire-and-forget), while chat goes **over HTTP** through the backend — because it needs Agent Mesh's
+own session concept for multi-turn memory, which the event-mesh entrypoint has no equivalent of.
+Recording is one-directional: `market-history` writes, the agent only reads.
 
 - **Frontend**: React + TypeScript + Vite + shadcn/ui, TradingView lightweight-charts. Connects to
   the broker directly over WebSockets using `solclientjs` — this is the entire real-time path.
@@ -168,7 +200,8 @@ flowchart LR
 
 ## How data flows
 
-Three distinct flows run through the same broker. Only the second and third ever touch an LLM.
+Four distinct flows. The first three run through the broker (only flows 2 and 3 touch an LLM); the
+fourth is the chat path, which deliberately does not.
 
 ### 1. Market data — browser to browser
 
@@ -249,6 +282,54 @@ type. Only one branch ever fires per run, so the cost is negligible. AMD is a ha
 "restricted list" example; the point is that a symbol on it is always Blocked no matter how
 confident or bullish the AI read is.
 
+### 4. Recording history, and asking about it
+
+Everything above is *live* — it exists only as it flies past. This flow makes it queryable, and is
+the one place AI reads a database instead of a message.
+
+```mermaid
+sequenceDiagram
+    participant Broker as Solace broker
+    participant MH as market-history (non-AI)
+    participant PG as Postgres
+    participant CW as Chat widget (browser)
+    participant BE as Express backend
+    participant HA as market-historian-agent
+
+    Note over Broker,PG: Continuous recording, no AI involved
+    Broker->>MH: market-data/>, twitter-feed/>, signal/>
+    MH->>PG: batched INSERT (history_writer: INSERT+SELECT only)
+
+    Note over CW,HA: On demand, when a user asks something
+    CW->>BE: POST /api/chat/session  (first open)
+    BE->>HA: POST /api/v1/sessions  -> real Agent Mesh session
+    CW->>BE: POST /api/chat/message {sessionId, message}
+    BE->>HA: message/stream (contextId = sessionId)
+    HA->>PG: SELECT ... (history_reader: SELECT only)
+    PG-->>HA: rows
+    HA-->>BE: prose answer (via session transcript)
+    BE-->>CW: {reply}
+```
+
+Three things about this are deliberate:
+
+- **SAM never writes.** The historian authenticates as `history_reader`, which Postgres grants
+  `SELECT` and nothing else. This matters because SAM's SQL connector hands the agent a
+  general-purpose SQL tool and its own docs are explicit that *"Agent Mesh cannot restrict what
+  queries agents execute — access control must be configured at the database level."* So the
+  guarantee lives in `db/init/002-roles.sh`, not in prompt wording. Even the writer role has no
+  `UPDATE`/`DELETE`, making the tables an append-only log.
+- **Chat uses real Agent Mesh sessions, not a homegrown chat channel.** The widget's conversations
+  appear in the Agent Mesh Web UI's own session list, and multi-turn memory is the platform's —
+  nothing is re-sent from the browser each turn. The backend proxies because that API returns no
+  CORS headers for the dashboard's origin (verified), and because it's explicitly labelled an
+  unstable Early Access surface — keeping it in one module (`dashboard/server/services/samChatService.ts`)
+  contains the blast radius of a breaking change.
+- **History can have gaps, by design.** `market-history` uses plain topic subscriptions with
+  `DIRECT` delivery, not a durable queue, and the dashboard's own eliding toggle can drop ticks
+  under load. So a restart leaves a hole. The agent's prompt therefore tells it to say plainly when
+  data doesn't cover a question rather than filling the gap with invention.
+
 ## Topic reference
 
 Every topic below flows through the one shared broker. "Publisher"/"Subscriber" describe the
@@ -256,10 +337,10 @@ Every topic below flows through the one shared broker. "Publisher"/"Subscriber" 
 
 | Topic | Publisher | Subscriber | Purpose |
 |---|---|---|---|
-| `market-data/EQ/{country}/{exchange}/{symbol}` | Browser (Market Data Publisher) | Browser (dashboard's own wildcard subscription) | Live price ticks. Browser-to-browser; demonstrates broker topic hierarchy, not AI. |
-| `twitter-feed/{symbol}` | Browser (Twitter Feed Publisher) | `market-events` entrypoint (`twitter-feed/>`) | Simulated social-media posts — the trigger for trading-signal-agent. |
-| `signal/{symbol}` | `market-events` entrypoint, on behalf of `trading-signal-agent` | Browser (dashboard `signal/*`) | Buy/Sell/Hold + confidence + reasoning, rendered as the **Signal** column. |
-| `signal/errors` | `market-events` entrypoint | *(none currently — surfaced only in `docker compose logs`)* | Static fallback topic if `trading-signal-agent` errors. |
+| `market-data/EQ/{country}/{exchange}/{symbol}` | Browser (Market Data Publisher) | Browser (dashboard's own wildcard subscription) **+ `market-history`** | Live price ticks. Demonstrates broker topic hierarchy; also recorded to Postgres. |
+| `twitter-feed/{symbol}` | Browser (Twitter Feed Publisher) | `market-events` entrypoint (`twitter-feed/>`) **+ `market-history`** | Simulated social-media posts — the trigger for trading-signal-agent. |
+| `signal/{symbol}` | `market-events` entrypoint, on behalf of `trading-signal-agent` | Browser (dashboard `signal/*`) **+ `market-history`** | Buy/Sell/Hold + confidence + reasoning, rendered as the **Signal** column. |
+| `signal/errors` | `market-events` entrypoint | `market-history` (logs it, deliberately does **not** record it as a signal) | Static fallback topic if `trading-signal-agent` errors. Note `signal/>` matches this, so any subscriber must branch on topic before parsing. |
 | `research/request/{symbol}` | Browser (Research button click) | `market-events` entrypoint (`research/request/>`) | Snapshot of what the dashboard already knows: price, latest tweet, current signal. |
 | `research/response/{symbol}` | `market-events` entrypoint, on behalf of `research-briefing-workflow` | Browser (dashboard `research/>`) | Full briefing + category + reasoning, rendered in the slide-out panel. |
 | `research/error/{symbol}` | `market-events` entrypoint | Browser (dashboard `research/>`) | Workflow failure (e.g. timeout) — the panel shows a retry button instead of a spinner. |
@@ -294,12 +375,15 @@ Agents, the workflow, and the entrypoint are all version-controlled YAML under
 solace-agent-mesh/
 ├── manifest.yaml                          which resources to apply, and where
 ├── models/
-│   ├── general.yaml                       chat-tier LLM alias (Orchestrator, Builder)
-│   └── cheap.yaml                         high-frequency-tier alias (the three demo agents)
+│   ├── general.yaml                       chat-tier LLM alias (Orchestrator, Builder, historian)
+│   └── cheap.yaml                         high-frequency-tier alias (the pipeline agents)
+├── connectors/
+│   └── market-history-connector.yaml      read-only SQL access to the history database
 ├── agents/
 │   ├── trading-signal-agent.yaml          tweet -> Buy/Sell/Hold
 │   ├── market-research-agent.yaml         fresh narrative research on a symbol
-│   └── verdict-reconciler-agent.yaml      compares research against the existing signal
+│   ├── verdict-reconciler-agent.yaml      compares research against the existing signal
+│   └── market-historian-agent.yaml        answers questions from recorded history (chat)
 ├── workflows/
 │   └── research-briefing-workflow.yaml    reconcile + deterministic compliance/actionability gate
 └── entrypoints/
@@ -327,8 +411,20 @@ message.
 | `trading-signal-agent` | `cheap` | Reads one social-media post, returns Buy/Sell/Hold + confidence + a one-line rationale. No toolsets — pure reasoning over the payload it's given. |
 | `market-research-agent` | `cheap` | Produces a short analyst-style briefing for a symbol from the live context the dashboard sends (price, latest post, current signal). Ships with **no toolsets** on purpose — real web search needs Google CSE credentials this demo doesn't require; see the comment in the agent's YAML to enable it. |
 | `verdict-reconciler-agent` | `cheap` | Used only inside the workflow (never triggered by an entrypoint rule). Compares the fresh research against the signal already on the mesh and scores agreement/confidence; its instruction is overridden per-node to also serve as the workflow's fixed-JSON terminal branches. |
+| `market-historian-agent` | `general` | Backs the chat widget. Queries the recorded history in Postgres through `market-history-connector` and answers in prose. Not part of any event pipeline and not triggered by the broker — reached over HTTP via the backend's chat proxy. |
 
-All three run on the `cheap` model alias, not `general` — see [Models](#models) below.
+The first three run on `cheap`; the historian runs on `general` — see [Models](#models) below.
+
+### Connector (`market-history-connector.yaml`)
+
+A `connector` resource (this repo's only one) gives an agent access to something outside the mesh.
+`type: sql`, `subtype: postgres`, pointed at the `postgres` service. SAM has **no SQLite subtype** —
+`sam config schema show connector --type sql` offers only postgres/mysql/mariadb/mssql/oracle —
+which is why the history database is Postgres.
+
+Its `username` is the security boundary: `history_reader` holds `SELECT` and nothing else, because
+the connector gives the agent a general SQL tool that SAM itself cannot police. See
+[How data flows](#4-recording-history-and-asking-about-it).
 
 ### Workflow (`research-briefing-workflow.yaml`)
 
@@ -343,10 +439,12 @@ terminal category nodes → `output_mapping`. Full breakdown and diagram in
 `general.yaml` and `cheap.yaml` both wrap the *same* underlying LLM endpoint
 (`LLM_SERVICE_ENDPOINT` / `LLM_SERVICE_API_KEY` in `.env`) but under two aliases with independently
 overridable model names — `LLM_SERVICE_GENERAL_MODEL_NAME` and `LLM_SERVICE_CHEAP_MODEL_NAME`. The
-three demo agents are pinned to `cheap` because they run on every tweet and every Research click;
-Agent Mesh's built-in Orchestrator/Builder chat agents stay on `general`. Point `cheap` at your
-provider's fastest/cheapest capable tier (`gpt-4o-mini`, Claude Haiku, Gemini Flash, ...) to keep a
-long demo session inexpensive.
+three pipeline agents are pinned to `cheap` because they run on every tweet and every Research click;
+Agent Mesh's built-in Orchestrator/Builder chat agents stay on `general`, and so does
+`market-historian-agent` — it fires at human typing cadence and has to write correct SQL and then
+narrate the results, which is the worst place to economize. Point `cheap` at your provider's
+fastest/cheapest capable tier (`gpt-4o-mini`, Claude Haiku, Gemini Flash, ...) to keep a long demo
+session inexpensive.
 
 ### Changing an agent or the workflow
 
@@ -379,6 +477,7 @@ a Mac** — a transient outbound connection grabs it and the container fails to 
 | Broker SEMP admin | **47081** | 8080 | |
 | Agent Mesh UI | **47801** | 8800 | |
 | Dashboard | **47173** | 5000 | host 5000 is taken by macOS AirPlay |
+| Postgres (history) | **47432** | 5432 | only for `psql` from the host; in-stack consumers use `postgres:5432` |
 
 ## Troubleshooting
 
@@ -416,6 +515,35 @@ Activities is scoped per-user. Both `event_rules` set `defaultUserIdentity: sam_
 WebUI's own dev user — deliberately, because a synthetic identity produces real, completed tasks
 that simply never render in that view.
 
+**The chat window says it can't reach Agent Mesh, or returns a 502**
+The backend proxies to `agent-mesh` over the compose network. Check `docker compose ps agent-mesh`
+is healthy, and that the dashboard has `SAM_PLATFORM_URL` set. Errors from the platform (an LLM
+budget cap, a missing model, a bad connector password) are surfaced verbatim in the chat panel
+rather than hidden — read the message before digging further.
+
+**The chat says it has no data / history is empty**
+Nothing has been recorded yet. Check the recorder is running and inserting:
+
+```bash
+docker compose logs market-history | grep inserted
+docker compose exec postgres psql -U postgres -d market_history -c \
+  "select 'ticks', count(*) from price_ticks union all select 'tweets', count(*) from tweets union all select 'signals', count(*) from signals;"
+```
+
+Start the Traffic Generators and give them a minute. `signals` stays at 0 until the
+trading-signal agent actually produces signals (check `docker compose logs agent-mesh` for LLM
+errors if tweets are flowing but signals aren't).
+
+**I changed `db/init/*` but nothing happened**
+Those scripts run only against a **fresh** data directory, so an existing volume ignores them. To
+re-run from scratch (destroys recorded history):
+
+```bash
+docker compose down
+docker volume rm trading-dashboard-solace_market-history-db
+docker compose up
+```
+
 **Using your own broker instead of the bundled one**
 A fresh PubSub+ Standard broker needs no setup: the `default` VPN accepts any credentials, SMF and
 web transport are enabled, and the default client-profile already permits guaranteed messaging and
@@ -442,17 +570,34 @@ baked into the image, not a mounted volume):
 docker compose up --build dashboard
 ```
 
-`dashboard/` layout, for reference:
+Repo layout, for reference:
 
 ```
 dashboard/
 ├── client/src/
-│   ├── components/       Dashboard.tsx, ResearchPanel.tsx, TrafficGeneratorPanel.tsx, ...
+│   ├── components/       Dashboard.tsx, ResearchPanel.tsx, ChatWidget.tsx, TrafficGeneratorPanel.tsx, ...
 │   ├── contexts/         TrafficGeneratorContext.tsx (browser-native publisher state)
 │   ├── hooks/            useSolaceConnection.ts (the direct broker connection)
 │   └── lib/              agentPayload.ts (unwraps agent/workflow replies), topicSubscriptionManager.ts
-├── server/                Express: serves the build, a few REST endpoints, no hot-path traffic
-└── shared/schema.ts       types shared by client and server, incl. ResearchBriefing / topic constants
+├── server/
+│   ├── routes.ts          REST endpoints, incl. the /api/chat/* proxy
+│   └── services/          solaceService.ts, samChatService.ts (Agent Mesh chat API client), ...
+└── shared/schema.ts       types shared by client and server (ResearchBriefing, ChatTurn, topics)
+
+market-history/            the non-AI recorder: broker -> Postgres
+├── src/index.ts           Solace subscriber + topic routing
+├── src/parse.ts           payload -> row, defensively (LLM output can be malformed)
+└── src/db.ts              batched, append-only INSERTs
+
+db/init/                   runs on first Postgres start only
+├── 001-schema.sql         tables + indexes
+└── 002-roles.sh           history_writer / history_reader roles - the read-only enforcement
+```
+
+The `market-history` service is a separate container with its own build, so changes there need:
+
+```bash
+docker compose up -d --build market-history
 ```
 
 ## Notes on agent output
