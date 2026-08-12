@@ -28,8 +28,16 @@
 
 const DEFAULT_PLATFORM_URL = 'http://agent-mesh:8800';
 
-/** Which agent the chat talks to. */
-const DEFAULT_AGENT_NAME = process.env.SAM_CHAT_AGENT ?? 'market-historian-agent';
+/**
+ * Which agent the chat talks to.
+ *
+ * The Orchestrator, deliberately - NOT a specific agent. It reads every
+ * deployed agent's card (their `skills` blocks) and delegates, so one chat
+ * window can field history questions, research requests, and signal questions
+ * alike instead of being limited to whatever single agent we hardcoded. Point
+ * SAM_CHAT_AGENT at a specific agent name to bypass delegation.
+ */
+const DEFAULT_AGENT_NAME = process.env.SAM_CHAT_AGENT ?? 'Orchestrator';
 
 /**
  * How long to wait for an agent's reply before giving up. Generous because the

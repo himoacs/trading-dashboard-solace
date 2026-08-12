@@ -1,6 +1,11 @@
 /**
- * Ask-SAM chat widget: a floating bottom-right panel for asking questions about
- * recorded market history in natural language.
+ * SAM Chat: a floating bottom-right panel for talking to Solace Agent Mesh in
+ * natural language.
+ *
+ * Requests go to the Orchestrator rather than any single agent, so it routes to
+ * whichever deployed agent fits the question - recorded history, a research
+ * briefing, a signal read - and the window isn't pinned to one topic. Which
+ * agent is a backend concern (SAM_CHAT_AGENT); this component just sends text.
  *
  * Two deliberate departures from the rest of this dashboard:
  *
@@ -32,13 +37,22 @@ import { Button } from '@/components/ui/button';
 import type { ChatTurn } from '@shared/schema';
 
 /** Where the chat session id is remembered, so a reload resumes the same
- * Agent Mesh conversation instead of silently orphaning it. */
-const SESSION_STORAGE_KEY = 'market-pulse-chat-session';
+ * Agent Mesh conversation instead of silently orphaning it. The key is
+ * versioned: a session stored before chat moved to the Orchestrator is bound to
+ * a different agent, so bumping this starts those users cleanly rather than
+ * resuming a conversation with the wrong agent behind it. */
+const SESSION_STORAGE_KEY = 'market-pulse-sam-chat-session-v2';
 
+/**
+ * Deliberately spans different agents, to make it obvious the Orchestrator is
+ * routing rather than one agent answering everything: the first is a history
+ * question (market-historian-agent), the second a research briefing
+ * (market-research-agent), the third an aggregate over recorded signals.
+ */
 const SUGGESTIONS = [
-  "What symbols do you have data for?",
-  "What was NVDA's price range recently?",
-  "How many Buy signals today?",
+  "What symbols do you have recorded data for?",
+  "Give me a research briefing on NVDA",
+  "How many Buy signals were there today?",
 ];
 
 export default function ChatWidget() {
@@ -176,8 +190,8 @@ export default function ChatWidget() {
     return (
       <Button
         onClick={() => setIsOpen(true)}
-        title="Ask about market history"
-        aria-label="Open market history chat"
+        title="SAM Chat"
+        aria-label="Open SAM Chat"
         className="fixed bottom-24 right-4 z-50 h-12 w-12 rounded-full p-0 shadow-lg"
       >
         <MessageSquare className="h-5 w-5" />
@@ -188,15 +202,15 @@ export default function ChatWidget() {
   return (
     <div
       role="dialog"
-      aria-label="Market history chat"
+      aria-label="SAM Chat"
       className="fixed bottom-24 right-4 z-40 flex w-[calc(100vw-2rem)] max-w-md flex-col overflow-hidden rounded-lg border border-border bg-background shadow-2xl"
       style={{ maxHeight: 'min(32rem, calc(100vh - 8rem))' }}
     >
       <header className="flex flex-shrink-0 items-center justify-between border-b border-border bg-muted/50 px-3 py-2">
         <div className="min-w-0">
-          <h2 className="truncate text-sm font-semibold">Ask about market history</h2>
+          <h2 className="truncate text-sm font-semibold">SAM Chat</h2>
           <p className="truncate text-xs text-muted-foreground">
-            Powered by Solace Agent Mesh
+            Solace Agent Mesh &middot; routed to the right agent
           </p>
         </div>
         <div className="flex flex-shrink-0 items-center gap-1">
@@ -228,7 +242,7 @@ export default function ChatWidget() {
         {turns.length === 0 && !isBusy && (
           <div className="space-y-3 py-2">
             <p className="text-sm text-muted-foreground">
-              Ask about recorded prices, posts, and trading signals — for example:
+              Ask about recorded market history, request research, or query the agents — for example:
             </p>
             <div className="flex flex-col items-start gap-1.5">
               {SUGGESTIONS.map((s) => (
@@ -264,9 +278,10 @@ export default function ChatWidget() {
         {isBusy && (
           <div className="flex items-center gap-2 text-xs text-muted-foreground" role="status">
             <Loader2 className="h-3.5 w-3.5 animate-spin" />
-            {/* The agent may run several SQL queries before answering, so set
-                expectations rather than implying it hung. */}
-            <span>Querying market history&hellip;</span>
+            {/* The Orchestrator may delegate to another agent, which may then run
+                several queries, so this can take a while - say what's happening
+                rather than letting it look hung. */}
+            <span>Asking Agent Mesh&hellip;</span>
           </div>
         )}
 
@@ -285,7 +300,7 @@ export default function ChatWidget() {
           onKeyDown={onKeyDown}
           rows={1}
           disabled={isBusy}
-          placeholder="Ask about past prices, posts, or signals..."
+          placeholder="Ask Agent Mesh anything..."
           aria-label="Chat message"
           className="max-h-24 min-h-[2.25rem] flex-1 resize-y rounded-md border border-border bg-background px-2 py-1.5 text-sm outline-none focus:ring-1 focus:ring-primary disabled:opacity-60"
         />
@@ -304,7 +319,7 @@ export default function ChatWidget() {
       {/* Same honesty as ResearchPanel's footer: this is model output over
           simulated demo data, not investment advice. */}
       <p className="flex-shrink-0 border-t border-border bg-muted/30 px-3 py-1.5 text-[10px] leading-tight text-muted-foreground">
-        Answers come from AI querying recorded demo data. Not financial advice.
+        AI-generated answers over simulated demo data. Not financial advice.
       </p>
     </div>
   );

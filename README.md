@@ -6,9 +6,10 @@ WebSockets; social-media chatter and "Research" clicks are picked up by SAM off 
 reasoned about by LLM-backed agents and a workflow, and the results are published right back onto
 it for the dashboard to render — the broker is the only integration point for that whole path.
 
-That live traffic is also recorded into Postgres by a separate, non-AI service, so a chat window in
-the dashboard can answer questions about **what already happened** — with the AI holding read-only
-database access, enforced by Postgres grants.
+That live traffic is also recorded into Postgres by a separate, non-AI service, and **SAM Chat** in
+the dashboard's corner lets you ask the mesh about it in plain language — routed through Agent Mesh's
+Orchestrator so one window reaches every agent, with the AI holding read-only database access
+enforced by Postgres grants.
 
 Everything runs from one `docker compose up`: broker, database, Agent Mesh, recorder, and dashboard.
 
@@ -42,10 +43,11 @@ Three things at once, deliberately:
    maps broker topics to **agents** and a **workflow**, and each result is published back onto the
    broker, so the dashboard renders it as just another subscriber. The **workflow** additionally
    chains agents together with deterministic business-rule gating in between.
-3. **Asking questions of history.** A separate, non-AI service records broker traffic into
-   Postgres; an agent reads it (read-only, enforced by database grants) via SAM's SQL connector; and
-   a chat window in the dashboard's corner turns that into natural-language Q&A over **real Agent
-   Mesh chat sessions** — the same sessions its own Web UI lists.
+3. **Conversational access to the whole mesh.** A separate, non-AI service records broker traffic
+   into Postgres; an agent reads it (read-only, enforced by database grants) via SAM's SQL
+   connector. **SAM Chat** in the dashboard's corner then routes questions through the
+   **Orchestrator**, which delegates to whichever agent fits — history, research, or signals — over
+   **real Agent Mesh sessions**, the same ones its own Web UI lists.
 
 ## Quick start
 
@@ -123,15 +125,20 @@ database setup, no clicking around the Agent Mesh UI:
    ordinary business logic, not the last word.
 7. Click the **Activity** icon in the header to deep-link into the Agent Mesh UI's Activities tab
    and show the actual agent/workflow tasks that just ran — proof this isn't a canned response.
-8. Click the **chat bubble** in the bottom-right corner and ask about what just happened, e.g.
-   *"What symbols do you have data for?"*, *"What was NVDA's price range in the last 10 minutes?"*,
-   or *"How many Buy signals today, and did they agree with the tweets?"* The historian agent writes
-   SQL against the recorded history and answers in prose. Let the generators run a few minutes first
-   so there's something to talk about.
-9. Optionally open <http://localhost:47801> directly and ask the Orchestrator something spanning
-   both agents, e.g. *"What's the latest signal on NVDA and what does your research say?"* The chat
-   sessions you started in step 8 are listed there too — same sessions, so you can show the
-   dashboard conversation continuing inside Agent Mesh's own UI.
+8. Click the **chat bubble** in the bottom-right corner to open **SAM Chat**. It talks to the
+   Orchestrator, which picks the right agent for each question, so one window covers several:
+   - *"What symbols do you have recorded data for?"* / *"What was NVDA's price range in the last 10
+     minutes?"* → routed to the historian, which queries the recorded history
+   - *"Give me a research briefing on NVDA"* → routed to the research agent
+   - *"How many Buy signals were there today, and did they agree with the tweets?"* → history again,
+     joining signals against posts
+
+   Let the generators run a few minutes first so there's something to talk about. The routing itself
+   is the point worth narrating: the dashboard doesn't know which agent answers.
+9. Optionally open <http://localhost:47801> — the conversations from step 8 are in its session list,
+   because they're the same Agent Mesh sessions. Continue one there to show the chat isn't a
+   dashboard-local gimmick, and check the **Activities** tab to see the Orchestrator's delegation to
+   another agent as separate tasks.
 
 > **Demo tip:** leave the Twitter Feed Publisher near its default 2 tweets/min. The slider goes much
 > higher, and while no messages are lost, each tweet costs one LLM call — crank it up and the
@@ -160,6 +167,7 @@ flowchart LR
         EP["market-events entrypoint<br/>(event_rules: topic -> agent/workflow)"]
         A1["trading-signal-agent"]
         WF["research-briefing-workflow<br/>(market-research-agent +<br/>verdict-reconciler-agent +<br/>business-rule gate)"]
+        ORCH["Orchestrator<br/>(delegates by agent skills)"]
         HA["market-historian-agent<br/>(sql connector)"]
     end
 
@@ -180,13 +188,18 @@ flowchart LR
     MH -- "INSERT (writer role)" --> PG
     PG -- "SELECT only (reader role)" --> HA
     CW -- "fetch /api/chat/*" --> Backend
-    Backend -- "session API (HTTP)" --> HA
+    Backend -- "session API (HTTP)" --> ORCH
+    ORCH -- delegates --> HA
+    ORCH -. "delegates" .-> WF
+    ORCH -. LLM call .-> LLM
     HA -. LLM call .-> LLM
 ```
 
 Note the two distinct AI paths: signals and research travel **over the broker** (event-driven,
 fire-and-forget), while chat goes **over HTTP** through the backend — because it needs Agent Mesh's
 own session concept for multi-turn memory, which the event-mesh entrypoint has no equivalent of.
+Chat enters at the **Orchestrator**, which reads the deployed agents' skill cards and delegates, so
+one window covers history, research, and signals rather than a single topic.
 Recording is one-directional: `market-history` writes, the agent only reads.
 
 - **Frontend**: React + TypeScript + Vite + shadcn/ui, TradingView lightweight-charts. Connects to
@@ -292,8 +305,9 @@ sequenceDiagram
     participant Broker as Solace broker
     participant MH as market-history (non-AI)
     participant PG as Postgres
-    participant CW as Chat widget (browser)
+    participant CW as SAM Chat (browser)
     participant BE as Express backend
+    participant ORCH as Orchestrator
     participant HA as market-historian-agent
 
     Note over Broker,PG: Continuous recording, no AI involved
@@ -302,14 +316,20 @@ sequenceDiagram
 
     Note over CW,HA: On demand, when a user asks something
     CW->>BE: POST /api/chat/session  (first open)
-    BE->>HA: POST /api/v1/sessions  -> real Agent Mesh session
+    BE->>ORCH: POST /api/v1/sessions  -> real Agent Mesh session
     CW->>BE: POST /api/chat/message {sessionId, message}
-    BE->>HA: message/stream (contextId = sessionId)
+    BE->>ORCH: message/stream (contextId = sessionId, agent_name = Orchestrator)
+    ORCH->>ORCH: pick an agent from the deployed skill cards
+    ORCH->>HA: delegate (history question)
     HA->>PG: SELECT ... (history_reader: SELECT only)
     PG-->>HA: rows
-    HA-->>BE: prose answer (via session transcript)
+    HA-->>ORCH: prose answer
+    ORCH-->>BE: final answer (via session transcript)
     BE-->>CW: {reply}
 ```
+
+A research or signal question takes the same path with the Orchestrator delegating elsewhere — the
+browser, the proxy, and the session are identical either way.
 
 Three things about this are deliberate:
 
@@ -325,6 +345,11 @@ Three things about this are deliberate:
   CORS headers for the dashboard's origin (verified), and because it's explicitly labelled an
   unstable Early Access surface — keeping it in one module (`dashboard/server/services/samChatService.ts`)
   contains the blast radius of a breaking change.
+- **Chat goes to the Orchestrator, not a fixed agent.** It reads every deployed agent's `skills`
+  block and delegates, so the same window answers "what was NVDA's range?" (historian), "brief me
+  on TSLA" (research), and signal questions — without the dashboard needing to know which agent
+  owns what. Because `agent_name` is a per-request parameter rather than config, pointing chat at a
+  single agent instead is just `SAM_CHAT_AGENT=market-historian-agent` — no `sam config apply`.
 - **History can have gaps, by design.** `market-history` uses plain topic subscriptions with
   `DIRECT` delivery, not a durable queue, and the dashboard's own eliding toggle can drop ticks
   under load. So a restart leaves a hole. The agent's prompt therefore tells it to say plainly when
@@ -383,7 +408,7 @@ solace-agent-mesh/
 │   ├── trading-signal-agent.yaml          tweet -> Buy/Sell/Hold
 │   ├── market-research-agent.yaml         fresh narrative research on a symbol
 │   ├── verdict-reconciler-agent.yaml      compares research against the existing signal
-│   └── market-historian-agent.yaml        answers questions from recorded history (chat)
+│   └── market-historian-agent.yaml        queries recorded history (SAM Chat, via Orchestrator)
 ├── workflows/
 │   └── research-briefing-workflow.yaml    reconcile + deterministic compliance/actionability gate
 └── entrypoints/
@@ -411,7 +436,8 @@ message.
 | `trading-signal-agent` | `cheap` | Reads one social-media post, returns Buy/Sell/Hold + confidence + a one-line rationale. No toolsets — pure reasoning over the payload it's given. |
 | `market-research-agent` | `cheap` | Produces a short analyst-style briefing for a symbol from the live context the dashboard sends (price, latest post, current signal). Ships with **no toolsets** on purpose — real web search needs Google CSE credentials this demo doesn't require; see the comment in the agent's YAML to enable it. |
 | `verdict-reconciler-agent` | `cheap` | Used only inside the workflow (never triggered by an entrypoint rule). Compares the fresh research against the signal already on the mesh and scores agreement/confidence; its instruction is overridden per-node to also serve as the workflow's fixed-JSON terminal branches. |
-| `market-historian-agent` | `general` | Backs the chat widget. Queries the recorded history in Postgres through `market-history-connector` and answers in prose. Not part of any event pipeline and not triggered by the broker — reached over HTTP via the backend's chat proxy. |
+| `market-historian-agent` | `general` | Queries the recorded history in Postgres through `market-history-connector` and answers in prose. Not part of any event pipeline and not triggered by the broker — reached when the Orchestrator delegates a history question from SAM Chat. |
+| `Orchestrator` (built-in) | `general` | Platform-seeded, not declared in this repo. What SAM Chat actually talks to: it reads the deployed agents' skill cards and delegates each question to whichever fits. |
 
 The first three run on `cheap`; the historian runs on `general` — see [Models](#models) below.
 

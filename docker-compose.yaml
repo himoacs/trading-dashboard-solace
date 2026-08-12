@@ -296,11 +296,12 @@ services:
       # directly - that origin gets no CORS headers - so the backend relays.
       # See dashboard/server/services/samChatService.ts.
       SAM_PLATFORM_URL: "http://agent-mesh:8800"
-      # Which agent the chat window talks to. market-historian-agent answers
-      # from the recorded history DB; set to "Orchestrator" to let SAM delegate
-      # across all agents instead (no config re-apply needed - it's a per-request
-      # parameter).
-      SAM_CHAT_AGENT: "${SAM_CHAT_AGENT:-market-historian-agent}"
+      # Which agent the chat window talks to. The Orchestrator delegates to
+      # whichever deployed agent fits the question (history, research, signals),
+      # so the chat isn't limited to one topic. Override with a specific agent
+      # name to bypass delegation - it's a per-request parameter, so no
+      # `sam config apply` is needed either way.
+      SAM_CHAT_AGENT: "${SAM_CHAT_AGENT:-Orchestrator}"
       SOLACE_BROKER_VPN: "${SOLACE_BROKER_VPN:-default}"
       SOLACE_BROKER_USERNAME: "${SOLACE_BROKER_USERNAME:-default}"
       SOLACE_BROKER_PASSWORD: "${SOLACE_BROKER_PASSWORD:-default}"
