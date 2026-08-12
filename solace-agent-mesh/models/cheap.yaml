@@ -1,0 +1,16 @@
+kind: model
+# See general.yaml for why this top-level `name:` is required by the resolver.
+name: cheap
+description: >
+  Low-cost LLM for high-frequency background agents (the trading-signal and
+  market-research agents, driven by the Traffic Generator's tweet stream) so a
+  long-running demo doesn't rack up Sonnet-tier costs on every tweet. Chat
+  agents (Orchestrator, Builder) stay on `general`.
+spec:
+  alias: cheap
+  provider: custom
+  modelName: ${LLM_SERVICE_CHEAP_MODEL_NAME, openai/bedrock-claude-4-5-haiku-tools}
+  apiBase: ${LLM_SERVICE_ENDPOINT}
+  authConfig:
+    type: apikey
+    api_key: ${LLM_SERVICE_API_KEY}

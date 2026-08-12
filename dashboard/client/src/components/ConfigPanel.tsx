@@ -200,7 +200,7 @@ export default function ConfigPanel({
   const connectionForm = useForm<SolaceConnection>({
     resolver: zodResolver(solaceConnectionSchema),
     defaultValues: {
-      brokerUrl: "ws://localhost:8008",
+      brokerUrl: "ws://localhost:47008",
       vpnName: "default",
       username: "demo",
       password: "demo",

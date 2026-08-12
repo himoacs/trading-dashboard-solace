@@ -331,6 +331,31 @@ export function useSolaceConnection() {
     }
   };
   
+  // Publish a JSON payload to a topic on the current session.
+  //
+  // Used for browser-initiated requests to Agent Mesh (e.g. asking the research
+  // agent about a stock), which travel over the same broker as everything else
+  // rather than over a separate HTTP path.
+  const publish = async (topicString: string, payload: unknown) => {
+    if (!solaceSession || !connected) {
+      console.error(`[SolaceConnection] Cannot publish to ${topicString}: not connected.`);
+      throw new Error('Not connected to Solace');
+    }
+
+    try {
+      const message = solace.SolclientFactory.createMessage();
+      message.setDestination(solace.SolclientFactory.createTopicDestination(topicString));
+      message.setBinaryAttachment(JSON.stringify(payload));
+      message.setDeliveryMode(solace.MessageDeliveryModeType.DIRECT);
+      solaceSession.send(message);
+      console.log(`[SolaceConnection] Published to ${topicString}`);
+    } catch (err) {
+      console.error(`[SolaceConnection] Error publishing to ${topicString}:`, err);
+      setError(err instanceof Error ? err : new Error(`Publish to ${topicString} failed`));
+      throw err;
+    }
+  };
+
   // Computed connected state
   // const isConnected = connected && wsConnected;
 
@@ -343,6 +368,7 @@ export function useSolaceConnection() {
     disconnect,
     subscribe,
     unsubscribe,
+    publish,
     session,
     solaceLastMessage, // Expose last Solace message
     // wsConnected     // Expose WebSocket connection status

@@ -1,0 +1,189 @@
+kind: workflow
+name: research-briefing-workflow
+description: >
+  Reconciles a fresh equity-research read against the trading signal already
+  published for the stock, deliberates when they disagree, then runs the
+  verdict through a deterministic compliance/actionability gate before
+  publishing. Triggered by the market-events entrypoint's research_request
+  rule (targetWorkflowName) - never invoked directly by a user.
+spec:
+  appConfig:
+    # MUST equal the resource name above AND the entrypoint's
+    # targetWorkflowName. The CLI validates targetWorkflowName against the
+    # workflow's resource name; the RUNTIME resolves it against this
+    # display_name (published as the agent card's display-name extension) -
+    # the two disagree unless they are identical. See the long note in
+    # entrypoints/market-events.yaml (research_request rule) for the full
+    # disassembly-backed explanation.
+    display_name: research-briefing-workflow
+    description: >
+      Narrative research -> reconcile against the existing signal -> refine
+      on disagreement -> compliance/actionability classification.
+    version: "1.0.0"
+    fail_fast: true
+    default_node_timeout: "60s"
+    workflow_timeout: "180s"
+
+    # NOTE: an earlier version of this design used the built-in
+    # transform_data_with_jmespath tool for compliance/classification. That
+    # tool operates on saved artifacts ("applies a JMESPath expression to a
+    # JSON/YAML/CSV artifact... result is always saved as a JSON artifact"),
+    # not on inline node data, so it's the wrong shape for a simple lookup on
+    # values already in hand. Compliance + actionability are expressed as a
+    # single deterministic `switch` instead (string/number comparisons only,
+    # no LLM) - the "not an agent" property is preserved, just via switch
+    # conditions rather than a tool call. The switch's terminal branches are
+    # tiny agent nodes (bound to the `cheap` model) because this workflow
+    # DSL has no pure-literal/constant node type - each terminal's instruction
+    # is a fixed one-line echo, not real reasoning, so the cost is
+    # negligible and only one branch ever actually fires per run.
+
+    nodes:
+      # --- AI core -----------------------------------------------------
+      - id: narrative_read
+        type: agent
+        agent_name: market-research-agent
+        retry:
+          limit: 2
+          retry_policy: OnError
+        instruction: |
+          Produce a market research briefing for {{workflow.input.symbol}}
+          using the live context below.
+
+          {{workflow.input}}
+
+      - id: reconcile
+        type: agent
+        agent_name: verdict-reconciler-agent
+        depends_on: [narrative_read]
+        retry:
+          limit: 2
+          retry_policy: OnError
+        instruction: |
+          Existing signal for {{workflow.input.symbol}}
+          ({{workflow.input.companyName}}): {{workflow.input.currentSignal}}
+
+          Fresh research: {{narrative_read.output}}
+
+      # --- Deterministic business rules (no LLM in the *decision*) -----
+      # classify_actionability depends ONLY on reconcile so it ALWAYS runs.
+      # (An earlier version routed through a confidence-gated refine loop and
+      # made classify depend on [route, refine]; but refine only runs on the
+      # low-confidence branch, so on high-confidence runs classify's
+      # dependency was never satisfied and it was silently skipped, leaving
+      # category null. Verified from the workflow output artifacts. The
+      # deliberation loop was a nice-to-have; a robust category is the point.)
+      #
+      # Compliance list is intentionally tiny and inline for this demo - add
+      # more restricted symbols as another condition/node pair.
+      - id: classify_actionability
+        type: switch
+        depends_on: [reconcile]
+        cases:
+          # Reference narrative_read.output.symbol, NOT workflow.input.symbol:
+          # in the switch/output expression context workflow.input.* resolves
+          # empty (verified - it also left symbol null in output_mapping), but
+          # a NODE output resolves reliably. market-research-agent echoes
+          # `symbol` in its outputSchema, so this is the dependable handle.
+          - condition: "'{{narrative_read.output.symbol}}' == 'AMD'"
+            node: cat_blocked
+          - condition: >-
+              {{reconcile.output.confidence}} >= 0.75 and
+              {{reconcile.output.agreement}} == true
+            node: cat_actionable
+          - condition: "{{reconcile.output.confidence}} >= 0.5"
+            node: cat_advisory
+        default_case: cat_watch
+
+      - id: cat_blocked
+        type: agent
+        agent_name: verdict-reconciler-agent
+        depends_on: [classify_actionability]
+        instruction: >-
+          Reply with exactly this JSON and nothing else:
+          {"category": "Blocked", "categoryReason": "Active internal review - pending investigation"}
+        # verdict-reconciler-agent's own outputSchema is {agreement, confidence,
+        # verdict, notes} - that governs what the workflow engine extracts
+        # from its reply regardless of the instruction above, so every
+        # terminal category node needs its own override to the shape it
+        # actually asks for. Confirmed via `sam task send` against this
+        # workflow directly: without this, output_mapping fails with
+        # "field 'category' not found in node output".
+        output_schema_override:
+          type: object
+          required: [category, categoryReason]
+          properties:
+            category: { type: string }
+            categoryReason: { type: string }
+
+      - id: cat_actionable
+        type: agent
+        agent_name: verdict-reconciler-agent
+        depends_on: [classify_actionability]
+        instruction: >-
+          Reply with exactly this JSON and nothing else:
+          {"category": "Actionable", "categoryReason": "High confidence, research agrees with the existing signal"}
+        output_schema_override:
+          type: object
+          required: [category, categoryReason]
+          properties:
+            category: { type: string }
+            categoryReason: { type: string }
+
+      - id: cat_advisory
+        type: agent
+        agent_name: verdict-reconciler-agent
+        depends_on: [classify_actionability]
+        instruction: >-
+          Reply with exactly this JSON and nothing else:
+          {"category": "Advisory", "categoryReason": "Moderate confidence or partial alignment"}
+        output_schema_override:
+          type: object
+          required: [category, categoryReason]
+          properties:
+            category: { type: string }
+            categoryReason: { type: string }
+
+      - id: cat_watch
+        type: agent
+        agent_name: verdict-reconciler-agent
+        depends_on: [classify_actionability]
+        instruction: >-
+          Reply with exactly this JSON and nothing else:
+          {"category": "Watch Only", "categoryReason": "Low confidence or the readings diverge"}
+        output_schema_override:
+          type: object
+          required: [category, categoryReason]
+          properties:
+            category: { type: string }
+            categoryReason: { type: string }
+
+    output_mapping:
+      # Use node outputs, not workflow.input.* (which resolves empty in this
+      # context - see the switch note above). market-research-agent echoes
+      # symbol/companyName in its output.
+      symbol: "{{narrative_read.output.symbol}}"
+      companyName: "{{narrative_read.output.companyName}}"
+      headline: "{{narrative_read.output.headline}}"
+      summary: "{{narrative_read.output.summary}}"
+      sentiment: "{{narrative_read.output.sentiment}}"
+      keyPoints: "{{narrative_read.output.keyPoints}}"
+      risks: "{{narrative_read.output.risks}}"
+      outlook: "{{narrative_read.output.outlook}}"
+      timestamp: "{{narrative_read.output.timestamp}}"
+      agreement: "{{reconcile.output.agreement}}"
+      confidence: "{{reconcile.output.confidence}}"
+      category:
+        coalesce:
+          - "{{cat_blocked.output.category}}"
+          - "{{cat_actionable.output.category}}"
+          - "{{cat_advisory.output.category}}"
+          - "{{cat_watch.output.category}}"
+      categoryReason:
+        coalesce:
+          - "{{cat_blocked.output.categoryReason}}"
+          - "{{cat_actionable.output.categoryReason}}"
+          - "{{cat_advisory.output.categoryReason}}"
+          - "{{cat_watch.output.categoryReason}}"
+
+  deploy: true

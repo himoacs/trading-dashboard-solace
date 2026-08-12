@@ -15,6 +15,10 @@ interface StockDataRowProps {
   getSignalClass: (signal: string) => string;
   getCountryNameForStock: (stock: StockDataWithMetadata) => string;
   extractExchangeFromTopic: (symbol: string) => string; // Or pass stock.exchange directly if always available
+  /** Ask the Agent Mesh research agent for a briefing on this stock. */
+  onResearchClick?: (symbol: string) => void;
+  /** Status of this symbol's research request, to show it in flight. */
+  researchStatus?: 'loading' | 'loaded' | 'error';
   // Add onForceTweet, onForceSignal if actions are directly on the row
   // onForceTweet: (symbol: string) => Promise<void>;
   // onForceSignal?: (symbol: string) => Promise<void>;
@@ -30,6 +34,8 @@ const StockDataRowComponent: React.FC<StockDataRowProps> = ({
   getSignalClass,
   getCountryNameForStock,
   extractExchangeFromTopic,
+  onResearchClick,
+  researchStatus,
   // onForceTweet,
   // onForceSignal
 }) => {
@@ -94,9 +100,20 @@ const StockDataRowComponent: React.FC<StockDataRowProps> = ({
         )}
       </td>
       <td className="pl-6 pr-3 py-4 whitespace-nowrap text-left">
-        <span className={`${getSignalClass(stock.tradingSignal?.signal || '')}`}>
-          {stock.tradingSignal?.signal || 'N/A'}
-        </span>
+        {stock.tradingSignal?.reasoning ? (
+          <HoverTooltip
+            tooltipContent={stock.tradingSignal.reasoning}
+            tooltipClassName="max-w-sm whitespace-pre-wrap break-words"
+          >
+            <span className={`cursor-help underline decoration-dotted ${getSignalClass(stock.tradingSignal.signal)}`}>
+              {stock.tradingSignal.signal}
+            </span>
+          </HoverTooltip>
+        ) : (
+          <span className={`${getSignalClass(stock.tradingSignal?.signal || '')}`}>
+            {stock.tradingSignal?.signal || 'N/A'}
+          </span>
+        )}
         {/* Example for action buttons if they were per row:
         {onForceSignal && (
           <Button onClick={() => onForceSignal(stock.symbol)} size="sm" variant="ghost" className="ml-2">Force Signal</Button>
@@ -105,6 +122,28 @@ const StockDataRowComponent: React.FC<StockDataRowProps> = ({
           <Button onClick={() => onForceTweet(stock.symbol)} size="sm" variant="ghost" className="ml-2">Force Tweet</Button>
         )}
         */}
+      </td>
+      <td className="px-6 py-4 whitespace-nowrap">
+        {onResearchClick && (
+          <Button
+            onClick={() => onResearchClick(stock.symbol)}
+            size="sm"
+            variant="outline"
+            disabled={researchStatus === 'loading'}
+            title={`Ask the AI research agent about ${stock.symbol}`}
+            aria-label={`Research ${stock.symbol}`}
+            className="text-xs"
+          >
+            {researchStatus === 'loading' ? (
+              <>
+                <span className="mr-1.5 inline-block h-3 w-3 animate-spin rounded-full border-2 border-current border-r-transparent" />
+                Researching
+              </>
+            ) : (
+              'Research'
+            )}
+          </Button>
+        )}
       </td>
     </tr>
   );

@@ -1,0 +1,172 @@
+kind: entrypoint
+name: market-events
+description: >
+  Bridges the trading dashboard's live Solace topics into Agent Mesh: routes
+  incoming market events to the right agent and publishes each result back onto
+  the same broker for the dashboard to render.
+spec:
+  type: event_mesh
+  deploy: true
+  values:
+    # Explicit connection to the SHARED broker. Deliberately not left blank:
+    # blank falls back to the runtime's embedded dev broker, which would isolate
+    # the agents from the dashboard's traffic.
+    #
+    # Must be native SMF (tcp://). Verified: the Go runtime rejects the 8008
+    # (host 47008) web-transport port with "Service Unavailable" - ws:// is
+    # for browsers only.
+    broker_url: ${SAM_EVENT_BROKER_URL, tcp://broker:55555}
+    broker_vpn: ${SOLACE_BROKER_VPN, default}
+    broker_username: ${SOLACE_BROKER_USERNAME, default}
+    # Never inherited from the platform broker config - must be explicit.
+    broker_password: ${SOLACE_BROKER_PASSWORD, default}
+    tls_skip_verify: "false"
+
+    # ---------------------------------------------------------------------
+    # EXPRESSION SYNTAX - verified against runtime 2.275.10 by inspecting the
+    # rendered A2A requests and published results on the broker. The two
+    # contexts use DIFFERENT syntax, which is the main trap here.
+    #
+    # 1. promptTemplate (input context) - single braces:
+    #      {topic}           -> "twitter-feed/NVDA"
+    #      {payload}         -> compact JSON of the whole message
+    #      {payload.symbol}  -> "NVDA"
+    #    Do NOT use the double-brace form the shipped docs show:
+    #    {{ message.payload }} fails with "unknown expression source", and
+    #    {{ input.payload }} renders Go map syntax (map[k:v ...]), not JSON.
+    #
+    # 2. forwardContext / dynamic topics (expression context) - double braces,
+    #    and sub-paths use a COLON, not a dot:
+    #      input.payload:symbol                  valid
+    #      input.payload.symbol                  "unknown expression source"
+    #      {{ user_data.forward_context:symbol }} valid in a dynamic topic
+    #    Single-brace {payload.symbol} is NOT interpolated in a topic - it is
+    #    published verbatim, giving a literal "signal/{payload.symbol}" topic.
+    #
+    # 3. The output context cannot see input.* at all. Anything a response
+    #    topic needs must be copied across via forwardContext first.
+    # ---------------------------------------------------------------------
+    event_rules:
+      # 1. Social-media chatter -> Buy/Sell/Hold trading signal.
+      #    Input topic is published by the dashboard's Traffic Generator;
+      #    output topic is what the dashboard already subscribes to (signal/*).
+      - name: tweet_to_signal
+        subscriptions:
+          - topic: "twitter-feed/>"
+        messageFormat: json
+        targetAgent: trading-signal-agent
+        promptTemplate: |
+          Analyze this social-media post and return the trading signal JSON.
+
+          {payload}
+        # Set to the WebUI's own dev user so event-mesh tasks show up in the
+        # Activities tab there (Activities is scoped per-user; a synthetic
+        # identity like "dashboard_event_user" produces real, completed tasks
+        # that simply never render in that view). Verified against the
+        # platform's tasks table, not just the UI.
+        defaultUserIdentity: sam_dev_user
+        # The output handler's expression context cannot see input.* - only what
+        # is forwarded here (as user_data.forward_context.<key>). This is what
+        # makes the dynamic response topic below resolve.
+        forwardContext:
+          symbol: input.payload:symbol
+        acknowledgmentPolicy:
+          # Signals are a continuous stream; a dropped post is not worth
+          # redelivering and holding the queue open would add latency.
+          mode: on_receive
+        successOutput:
+          enabled: true
+          # Resolves to e.g. "signal/NVDA", which the dashboard's existing
+          # "signal/*" subscription picks up. (A static "signal/output" topic
+          # would also work as a fallback - that wildcard matches it too, and
+          # the dashboard can recover the symbol from the payload - but the
+          # per-symbol topic is what makes routing visible on the mesh.)
+          topic: "signal/{{ user_data.forward_context:symbol }}"
+          topicType: dynamic
+          responseType: text
+          format: json
+        errorOutput:
+          enabled: true
+          topic: "signal/errors"
+          topicType: static
+
+      # 2. Dashboard "research this stock" click -> analyst briefing.
+      #    Request/reply over the same broker, so the dashboard never has to
+      #    talk to Agent Mesh over HTTP.
+      - name: research_request
+        subscriptions:
+          - topic: "research/request/>"
+        messageFormat: json
+        # Routes to research-briefing-workflow (reconcile + business-rule gate).
+        #
+        # CRITICAL, HARD-WON DETAIL - targetWorkflowName must equal the
+        # workflow's DISPLAY NAME, exactly, character-for-character:
+        #
+        #   workflows/research-briefing-workflow.yaml deliberately sets
+        #     spec.appConfig.display_name: research-briefing-workflow
+        #   EQUAL to its resource name, precisely so this one value works for
+        #   BOTH the CLI's validation (which checks the resource name) AND the
+        #   runtime's dispatch resolution (which matches the display_name).
+        #   They validate/resolve against DIFFERENT things, so they must be
+        #   identical or one side breaks. Do not use the internal
+        #   workflow_<uuid> - it is deploy-time and not stable.
+        #
+        # Why: unlike targetAgent (which the platform resolves via a
+        # cfgapply "xref=agent" rewrite to the internal agent_<uuid> before
+        # deploy), the runtime performs NO name->ID translation for
+        # targetWorkflowName - the value is copied verbatim into the gateway
+        # handler. At dispatch, resolveAgentName() tries, in order:
+        #   (a) exact match against registered runtime names
+        #       (workflow_<uuidv7>) - the UUID is deploy-time and not
+        #       knowable/stable in declarative config, so we can't use it;
+        #   (b) exact, case-sensitive match against each agent card's
+        #       display-name extension (params.display_name).
+        # On a miss it SILENTLY returns the raw string and publishes to
+        # solace-agent-mesh/a2a/v1/agent/request/<raw-string> - a topic with
+        # no subscriber - so the event vanishes with no error and the task
+        # sits until the platform's 1h abandoned-task sweep. That silent
+        # drop is exactly what "unknown" in the Activities graph means.
+        # Matching the display name makes fallback (b) resolve to the
+        # workflow's real workflow_<uuid> topic. Verified from a disassembly
+        # of the 2.275.10 runtime (event_rule_translator.go emitHandlerTarget,
+        # gateway.go resolveAgentName:741-748, discovery.go FindByConfiguredName
+        # :289-309) and confirmed end-to-end on the broker.
+        targetWorkflowName: research-briefing-workflow
+        inputExpression: input.payload
+        # --- Known-working fallback (targetAgent), commented out ---
+        # targetAgent: market-research-agent
+        # promptTemplate: |
+        #   Produce a market research briefing for {payload.symbol} using the
+        #   live context below.
+        #
+        #   {payload}
+        defaultUserIdentity: sam_dev_user
+        forwardContext:
+          symbol: input.payload:symbol
+        acknowledgmentPolicy:
+          # A user is watching a spinner for this one, so don't lose it: ack
+          # only once the task finishes, and allow generous time for the LLM.
+          mode: on_completion
+          timeoutSeconds: 180
+        successOutput:
+          enabled: true
+          topic: "research/response/{{ user_data.forward_context:symbol }}"
+          topicType: dynamic
+          # Workflow response-type behaviour, established empirically on
+          # 2.275.10 by capturing the exact bytes published here:
+          #   text       -> just a status line ("Workflow ... completed
+          #                 successfully."), no data.
+          #   structured -> publishes null (even with structuredInvocation
+          #                 output_schema declared).
+          #   full       -> publishes the whole A2A task object; the
+          #                 workflow's output_mapping result is inline at
+          #                 status.message.parts[0].data. The dashboard digs
+          #                 it out (see lib/agentPayload.ts unwrap).
+          # So `full` is the only type that actually carries the briefing.
+          responseType: full
+          format: json
+        errorOutput:
+          enabled: true
+          # Symbol-scoped so the dashboard can clear the right spinner.
+          topic: "research/error/{{ user_data.forward_context:symbol }}"
+          topicType: dynamic

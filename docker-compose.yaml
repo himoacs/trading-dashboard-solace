@@ -1,23 +1,214 @@
+# Market Pulse Dashboard - full demo stack
+#
+#   broker            Solace PubSub+ Standard - the ONE broker everything shares
+#   agent-mesh        Solace Agent Mesh (Go) runtime, all components embedded
+#   sam-config        one-shot: applies solace-agent-mesh/ declarative config
+#   client-usernames  one-shot: provisions demo/demo and sun/sun on the broker
+#   queue-guardrail   one-shot: caps the tweet_to_signal queue's backlog TTL
+#   dashboard         the React + Express trading dashboard
+#
+# Quick start:
+#   ./scripts/load-sam-images.sh     # one time - SAM images aren't on a registry
+#   docker compose up
+#
+# Host ports are all deliberately below 49152: macOS reserves 49152-65535 as its
+# ephemeral range, so Solace's conventional 55555 cannot be published reliably
+# there (it gets transiently grabbed and the bind fails).
+#
+# All host ports live in the 47xxx range on purpose: 5173/8080/8081/8800/8008
+# are common defaults (Vite, generic dev-http, Agent Mesh's own convention,
+# etc.) that collide with other projects' containers or dev servers on the
+# same machine. Each new number keeps the old one as a suffix purely as a
+# mnemonic (47008 <- 8008, 47555 <- 8555, ...); there's no other significance
+# to the 470xx/475xx/478xx/471xx split.
+
 services:
-  trading_dashboard:
-    build: .
+  # ---------------------------------------------------------------------------
+  # Solace PubSub+ Standard broker. Shared by the dashboard, its traffic
+  # generators, and every Agent Mesh component - so all demo traffic is visible
+  # in one place.
+  # ---------------------------------------------------------------------------
+  broker:
+    image: solace/solace-pubsub-standard:latest
+    container_name: market-pulse-broker
+    hostname: broker
+    shm_size: 2g
+    ulimits:
+      core: -1
+      nofile:
+        soft: 2448
+        # Broker 10.26+ refuses to start unless the hard limit is 1048576.
+        # The 42192 value copied from older Solace docs fails its power-on
+        # self-test with "POST Violation [022]".
+        hard: 1048576
+    environment:
+      - username_admin_globalaccesslevel=admin
+      - username_admin_password=admin
+      - system_scaling_maxconnectioncount=100
     ports:
-      # Maps host port 5173 to container port 5000, where the app server runs.
-      - "5173:5000"
-    # To provide your secrets, you can use an environment file.
-    # Create a file named .env in the same directory as this docker-compose.yaml
-    # and add your secrets to it like this:
-    # SOLACE_BROKER_URL=tcp://your-broker-url:55555
-    # SOLACE_BROKER_USERNAME=your-username
-    # SOLACE_BROKER_PASSWORD=your-password
-    # SOLACE_BROKER_VPN=your-vpn
-    # LLM_API_KEY=your-llm-api-key
-    env_file:
-      - .env
-    # Alternatively, you can define the environment variables directly:
-    # environment:
-    #   - SOLACE_BROKER_URL=tcp://your-broker-url:55555
-    #   - SOLACE_BROKER_USERNAME=your-username
-    #   - SOLACE_BROKER_PASSWORD=your-password
-    #   - SOLACE_BROKER_VPN=your-vpn
-    #   - LLM_API_KEY=your-llm-api-key 
+      - "47008:8008"     # Web transport (WebSocket) - what the browser uses
+      - "47555:55555"    # SMF - only needed by host-run tools / npm run dev
+      - "47081:8080"     # SEMP admin UI + REST API
+    healthcheck:
+      # Deliberately NOT a TCP port check: Docker's port proxy accepts
+      # connections immediately, so a port probe reports ready at 0s while the
+      # broker is still ~20s from accepting client logins. Deliberately NOT the
+      # SEMP about/api endpoint either - it answers ~3s before messaging is
+      # actually up, which is enough to make agent-mesh fail its first connect.
+      # This is Solace's own guaranteed-messaging readiness probe.
+      test: ["CMD-SHELL", "curl -sf http://localhost:5550/health-check/guaranteed-active || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 20s
+    volumes:
+      - broker-data:/var/lib/solace
+
+  # ---------------------------------------------------------------------------
+  # Agent Mesh runtime. The image's default command runs every component
+  # in-process (entrypoint executor, platform service, secure tool runtime,
+  # agent-workflow executor) and serves the Web UI.
+  # ---------------------------------------------------------------------------
+  agent-mesh:
+    image: solace-agent-mesh:${SAM_VERSION:-2.275.10}
+    container_name: market-pulse-agent-mesh
+    depends_on:
+      broker:
+        condition: service_healthy
+    # Self-heals if the broker is still settling when this first connects -
+    # a failed initial broker connect exits the process rather than retrying.
+    restart: unless-stopped
+    environment:
+      # --- shared broker, explicitly NOT the embedded dev broker ---
+      SOLACE_DEV_MODE: "false"
+      # Must be native SMF. The Go runtime rejects the 8008 (host 47008)
+      # web-transport port with "Service Unavailable" - ws:// is for browser
+      # clients only.
+      SOLACE_BROKER_URL: "tcp://broker:55555"
+      SOLACE_BROKER_VPN: "${SOLACE_BROKER_VPN:-default}"
+      SOLACE_BROKER_USERNAME: "${SOLACE_BROKER_USERNAME:-default}"
+      SOLACE_BROKER_PASSWORD: "${SOLACE_BROKER_PASSWORD:-default}"
+      NAMESPACE: "solace-agent-mesh"
+
+      # --- persistence ---
+      # SQLite is sufficient for the whole platform here - no Postgres needed.
+      # Paths must stay under /tmp/sam-data: that directory exists in the image
+      # owned by samuser (uid 10001), whereas a volume mounted at a path the
+      # image doesn't have (e.g. /data) is created root-owned and SQLite then
+      # fails with "unable to open database file (14)".
+      SAM_DATA_DIR: "/tmp/sam-data"
+      PLATFORM_DATABASE_URL: "sqlite:///tmp/sam-data/platform.db"
+
+      # --- LLM: the only external credential this demo needs ---
+      LLM_SERVICE_ENDPOINT: "${LLM_SERVICE_ENDPOINT}"
+      LLM_SERVICE_API_KEY: "${LLM_SERVICE_API_KEY}"
+      LLM_SERVICE_GENERAL_MODEL_NAME: "${LLM_SERVICE_GENERAL_MODEL_NAME:-openai/gpt-4o}"
+      LLM_SERVICE_PLANNING_MODEL_NAME: "${LLM_SERVICE_PLANNING_MODEL_NAME:-openai/gpt-4o}"
+
+      SESSION_SECRET_KEY: "${SAM_SESSION_SECRET:-change-me-for-anything-shared}"
+    ports:
+      - "47801:8800"     # Agent Mesh Web UI + platform API
+    volumes:
+      - sam-data:/tmp/sam-data
+    healthcheck:
+      # The image ships python3 but no curl/wget.
+      test: ["CMD-SHELL", "python3 -c \"import urllib.request;urllib.request.urlopen('http://localhost:8800/',timeout=3)\" || exit 1"]
+      interval: 10s
+      timeout: 10s
+      retries: 30
+      start_period: 30s
+
+  # ---------------------------------------------------------------------------
+  # One-shot: pushes solace-agent-mesh/ into the running platform, so the demo
+  # needs no manual clicking in the Agent Mesh UI and no locally installed CLI
+  # (the runtime image already contains the `sam` binary).
+  #
+  # Re-running `docker compose up` re-applies and is a no-op when nothing
+  # changed. Deletes are never performed (no --prune), so the built-in
+  # Orchestrator and Builder agents survive.
+  # ---------------------------------------------------------------------------
+  sam-config:
+    image: solace-agent-mesh:${SAM_VERSION:-2.275.10}
+    container_name: market-pulse-sam-config
+    depends_on:
+      agent-mesh:
+        condition: service_healthy
+    restart: on-failure:3
+    environment:
+      SAM_PLATFORM_URL: "http://agent-mesh:8800"
+      SOLACE_BROKER_VPN: "${SOLACE_BROKER_VPN:-default}"
+      SOLACE_BROKER_USERNAME: "${SOLACE_BROKER_USERNAME:-default}"
+      SOLACE_BROKER_PASSWORD: "${SOLACE_BROKER_PASSWORD:-default}"
+      SAM_EVENT_BROKER_URL: "tcp://broker:55555"
+      LLM_SERVICE_ENDPOINT: "${LLM_SERVICE_ENDPOINT}"
+      LLM_SERVICE_API_KEY: "${LLM_SERVICE_API_KEY}"
+      LLM_SERVICE_GENERAL_MODEL_NAME: "${LLM_SERVICE_GENERAL_MODEL_NAME:-openai/gpt-4o}"
+    volumes:
+      - ./solace-agent-mesh:/config:ro
+    command: ["config", "apply", "-m", "/config/manifest.yaml", "--no-dotenv"]
+
+  # ---------------------------------------------------------------------------
+  # One-shot: provisions the demo/demo and sun/sun client-username objects on
+  # the default VPN via SEMP (see scripts/create-client-usernames.sh). Only
+  # needs the broker itself - independent of sam-config/agent-mesh, since
+  # those connect as SOLACE_BROKER_USERNAME/PASSWORD (default/default by env
+  # var), a separate identity from these two browser/external-tool logins.
+  # ---------------------------------------------------------------------------
+  client-usernames:
+    image: solace/solace-pubsub-standard:latest
+    container_name: market-pulse-client-usernames
+    depends_on:
+      broker:
+        condition: service_healthy
+    restart: on-failure:3
+    environment:
+      SOLACE_BROKER_VPN: "${SOLACE_BROKER_VPN:-default}"
+    volumes:
+      - ./scripts/create-client-usernames.sh:/create-client-usernames.sh:ro
+    entrypoint: ["sh", "/create-client-usernames.sh"]
+
+  # ---------------------------------------------------------------------------
+  # One-shot: caps the tweet_to_signal queue's message TTL via SEMP so a
+  # long-running demo can't accumulate an unbounded backlog of stale tweets
+  # (see scripts/set-tweet-queue-ttl.sh for why this can't be done from the
+  # declarative entrypoint config). Reuses the broker image purely because it
+  # already has curl and is already pulled - it does nothing broker-specific.
+  # ---------------------------------------------------------------------------
+  queue-guardrail:
+    image: solace/solace-pubsub-standard:latest
+    container_name: market-pulse-queue-guardrail
+    depends_on:
+      sam-config:
+        condition: service_completed_successfully
+    restart: "no"
+    environment:
+      SOLACE_BROKER_VPN: "${SOLACE_BROKER_VPN:-default}"
+      TWEET_QUEUE_TTL_SECONDS: "${TWEET_QUEUE_TTL_SECONDS:-300}"
+    volumes:
+      - ./scripts/set-tweet-queue-ttl.sh:/set-tweet-queue-ttl.sh:ro
+    entrypoint: ["sh", "/set-tweet-queue-ttl.sh"]
+
+  # ---------------------------------------------------------------------------
+  # The dashboard itself (React frontend + Express backend).
+  # ---------------------------------------------------------------------------
+  dashboard:
+    build: .
+    container_name: market-pulse-dashboard
+    depends_on:
+      broker:
+        condition: service_healthy
+    environment:
+      # Backend-side Solace connection (the browser connects separately over
+      # ws://localhost:47008 using the Solace Connection panel defaults).
+      SOLACE_BROKER_URL: "tcp://broker:55555"
+      SOLACE_BROKER_VPN: "${SOLACE_BROKER_VPN:-default}"
+      SOLACE_BROKER_USERNAME: "${SOLACE_BROKER_USERNAME:-default}"
+      SOLACE_BROKER_PASSWORD: "${SOLACE_BROKER_PASSWORD:-default}"
+    ports:
+      # Host 47173 -> container 5000. Host 5000 is taken by macOS Control
+      # Center (AirPlay Receiver), which is why the app is not published there.
+      - "47173:5000"
+
+volumes:
+  broker-data:
+  sam-data:

@@ -1,0 +1,118 @@
+kind: agent
+name: trading-signal-agent
+description: >
+  Reads social-media chatter about a public company and decides whether the
+  stock should be bought, sold, or held, returning the verdict plus a short
+  rationale and a confidence score.
+spec:
+  # Uses the `general` alias the runtime registers from LLM_SERVICE_* env vars.
+  modelProvider: ["cheap"]
+
+  # No toolsets. This agent is a pure reasoning step in an event pipeline:
+  # it must never try to ask a human anything (so no hil_tools) and has no
+  # reason to touch the web or artifacts.
+  toolsets: []
+  connectors: []
+  skillRefs: []
+  skillIds: []
+  inputModes: ["text"]
+  outputModes: ["text"]
+
+  # Advertised on the agent card so the Orchestrator can delegate to it in chat.
+  skills:
+    - id: analyze_market_sentiment
+      name: Market sentiment analysis
+      description: >
+        Judge whether social-media chatter about a company is bullish, bearish
+        or inconclusive and turn it into a Buy/Sell/Hold trading signal.
+      tags: [trading, sentiment, signals]
+      examples:
+        - "What's the signal on NVDA right now?"
+        - "Is this tweet bullish or bearish for Microsoft?"
+
+  systemPrompt: |
+    You are a market-sentiment analyst inside an automated, event-driven trading
+    pipeline. Each task you receive is a single social-media post about one
+    publicly traded company, delivered from a Solace event broker.
+
+    Your job: decide whether that post implies the company's stock should be
+    bought, sold, or held, and return the verdict as JSON.
+
+    How to decide:
+    - "Buy"  - the post is clearly positive for the company's prospects
+               (beats expectations, strong growth, upgrades, major wins).
+    - "Sell" - the post is clearly negative (misses, downgrades, lawsuits,
+               churn, guidance cuts, scandals).
+    - "Hold" - the post is neutral, ambiguous, purely factual, or you are
+               genuinely uncertain. Prefer "Hold" over guessing.
+
+    Set `confidence` between 0.0 and 1.0 to reflect how strong the signal is.
+    Weak or mixed evidence should score low; do not inflate confidence.
+
+    Keep `reasoning` to one short sentence a trader could scan at a glance.
+
+    Use EXACTLY these JSON keys, spelled exactly as shown - the dashboard reads
+    them by name and a renamed key renders as missing data:
+      symbol, companyName, signal, confidence, reasoning, content, timestamp
+    In particular the ticker key is `symbol`, never `ticker`.
+
+    Copy `symbol`, `companyName` and `content` through from the incoming post
+    unchanged - `content` must be the original post text, because the dashboard
+    displays it next to your signal. Set `timestamp` to the post's timestamp
+    when present, otherwise the current time in ISO-8601 format.
+
+    CRITICAL OPERATING CONSTRAINTS:
+    - You run fully autonomously. There is no human in this loop. Never ask a
+      question, never request clarification, never wait for input - always
+      return your best judgement from the payload you were given.
+    - OUTPUT FORMAT IS ABSOLUTE: your entire reply must be one raw JSON object.
+      The first character you emit must be `{` and the last must be `}`.
+      Never wrap it in ``` fences, never prefix it with "json", never add any
+      explanation before or after it. Your reply is published straight onto a
+      message broker and parsed by a program - anything other than bare JSON
+      breaks the dashboard that consumes it.
+
+  additionalConfigurations:
+    # Event-driven agents must not stream: the entrypoint publishes one final
+    # result to a topic, so partial chunks have nowhere to go.
+    supports_streaming: false
+    validationMaxRetries: 2
+    # NOTE: treat outputSchema as documentation-plus-best-effort, not a
+    # guarantee. Observed on runtime 2.275.10: an agent reply that omitted a
+    # required property (and renamed another) was still published rather than
+    # rejected or retried, and replies routinely arrive wrapped in a ```json
+    # fence. The system prompt above therefore names the keys explicitly, and
+    # the dashboard defends itself in client/src/lib/agentPayload.ts.
+    # Shape matched to what the dashboard already parses off `signal/*`:
+    # `signal` -> the badge, `confidence` -> tradingSignal.confidence,
+    # `content` -> the "Latest Tweet" column, `symbol` -> the row it lands on.
+    outputSchema:
+      type: object
+      required: [symbol, signal, confidence, content]
+      properties:
+        symbol:
+          type: string
+          description: Ticker symbol the post is about, e.g. NVDA.
+        companyName:
+          type: string
+          description: Company name as supplied in the incoming post.
+        signal:
+          type: string
+          enum: [Buy, Sell, Hold]
+          description: The trading verdict.
+        confidence:
+          type: number
+          minimum: 0
+          maximum: 1
+          description: How strong the signal is, 0.0 to 1.0.
+        reasoning:
+          type: string
+          description: One short sentence explaining the verdict.
+        content:
+          type: string
+          description: The original post text, copied through unchanged.
+        timestamp:
+          type: string
+          description: ISO-8601 timestamp of the post.
+
+  deploy: true

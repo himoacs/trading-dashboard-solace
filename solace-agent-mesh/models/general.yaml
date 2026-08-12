@@ -1,0 +1,24 @@
+kind: model
+# The manifest resolves `resources.models: [general]` by this top-level name.
+# (The `sam config schema example model` output omits it, but the resolver
+# requires it: without it apply fails with `"general" not found under
+# /config/models`.)
+name: general
+description: >
+  Default LLM for every agent in the trading dashboard demo. Declared here (not
+  left to first-run env seeding) so that changing the key or model in .env and
+  re-running sam config apply actually takes effect.
+spec:
+  # `general` is the alias agents reference via spec.modelProvider. The runtime
+  # also seeds an alias of this name from LLM_SERVICE_* on a first run against an
+  # empty database; declaring it explicitly keeps that seeded row in sync
+  # afterwards, because later env-var changes alone are ignored once the value
+  # is persisted in the platform DB.
+  alias: general
+  # "custom" = any OpenAI-compatible endpoint, which is what a LiteLLM proxy is.
+  provider: custom
+  modelName: ${LLM_SERVICE_GENERAL_MODEL_NAME, openai/claude-3-7-sonnet}
+  apiBase: ${LLM_SERVICE_ENDPOINT}
+  authConfig:
+    type: apikey
+    api_key: ${LLM_SERVICE_API_KEY}

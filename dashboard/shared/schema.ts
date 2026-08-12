@@ -167,6 +167,7 @@ export type StockDataWithMetadata = {
     signal: string;
     confidence: number;
     timestamp: string; // ISO date string
+    reasoning?: string; // Agent's rationale for the signal, shown in a tooltip
   } | null;
   latestNews: {
     headline: string;
@@ -188,6 +189,57 @@ export type StockDataWithMetadata = {
     timestamp: string; // ISO date string
   } | null;
 };
+
+// ---------------------------------------------------------------------------
+// Agent Mesh market research (request/reply over Solace)
+//
+// The dashboard publishes a request to research/request/{symbol}; the Agent
+// Mesh market-research-agent replies on research/response/{symbol} (or
+// research/error/{symbol}). See solace-agent-mesh/entrypoints/market-events.yaml
+// ---------------------------------------------------------------------------
+export const RESEARCH_REQUEST_TOPIC_PREFIX = 'research/request/';
+export const RESEARCH_RESPONSE_TOPIC_PREFIX = 'research/response/';
+export const RESEARCH_ERROR_TOPIC_PREFIX = 'research/error/';
+
+/** What the dashboard sends: the live context it already has for this stock. */
+export type ResearchRequest = {
+  symbol: string;
+  companyName?: string;
+  currentPrice?: number | null;
+  percentChange?: number | null;
+  latestTweet?: string | null;
+  currentSignal?: string | null;
+  requestedAt: string;
+};
+
+/**
+ * What the research agent returns. Every field beyond `symbol` is optional on
+ * purpose: this is LLM output, so the UI must render partial briefings rather
+ * than assume the model populated everything.
+ */
+export type ResearchBriefing = {
+  symbol: string;
+  companyName?: string;
+  headline?: string;
+  summary?: string;
+  sentiment?: string;
+  keyPoints?: string[];
+  risks?: string[];
+  outlook?: string;
+  timestamp?: string;
+  /** Does this fresh research agree with the signal already showing for this stock? */
+  agreement?: boolean;
+  /** How settled the reconciled verdict is, 0.0-1.0 (from research-briefing-workflow). */
+  confidence?: number;
+  /** Deterministic business-rule classification - not an LLM judgment call. */
+  category?: 'Blocked' | 'Actionable' | 'Advisory' | 'Watch Only';
+  categoryReason?: string;
+};
+
+export type ResearchState =
+  | { status: 'loading'; requestedAt: number }
+  | { status: 'loaded'; briefing: ResearchBriefing; receivedAt: number }
+  | { status: 'error'; message: string; receivedAt: number };
 
 // Solace client connection schema
 export const solaceConnectionSchema = z.object({

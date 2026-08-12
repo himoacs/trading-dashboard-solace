@@ -1,0 +1,37 @@
+kind: manifest
+name: trading-dashboard-demo
+description: >
+  Agents and event-mesh entrypoints for the Market Pulse trading dashboard demo.
+  Applied automatically by the sam-config service in docker-compose.
+
+# The embedded Agent Mesh runtime fronts its platform control API on the same
+# port as the Web UI. This is the in-compose address, used by the sam-config
+# service. `${VAR}` substitution is NOT applied to target.url, so it must be a
+# literal; override it from elsewhere with the CLI flag instead, e.g. running
+# from your host:
+#   sam config apply -m solace-agent-mesh/manifest.yaml --url http://localhost:47801
+target:
+  url: http://agent-mesh:8800
+
+# The LLM is still configured in exactly one place (.env, via LLM_SERVICE_*),
+# but the `general` model is also declared as a resource here. That matters:
+# the runtime only seeds model aliases from the environment on a first run
+# against an empty database, so afterwards a changed key or model name in .env
+# is ignored until `sam config apply` pushes it. Declaring it keeps the two in
+# sync without having to wipe the platform volume.
+#
+# `cheap` is a second alias (models/cheap.yaml) bound only to the two
+# high-frequency background agents (trading-signal, market-research), so a
+# long demo doesn't run every tweet through the same tier as interactive chat.
+resources:
+  models:
+    - general
+    - cheap
+  agents:
+    - trading-signal-agent
+    - market-research-agent
+    - verdict-reconciler-agent
+  workflows:
+    - research-briefing-workflow
+  entrypoints:
+    - market-events

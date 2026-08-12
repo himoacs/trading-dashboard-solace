@@ -16,17 +16,33 @@ import {
   SolaceConnection, 
   StockSelection,
   StockDataWithMetadata,
-  ExchangeSubscription
+  ExchangeSubscription,
+  ResearchRequest,
+  ResearchState,
+  RESEARCH_REQUEST_TOPIC_PREFIX,
+  RESEARCH_RESPONSE_TOPIC_PREFIX,
+  RESEARCH_ERROR_TOPIC_PREFIX
 } from "@shared/schema";
 import { getWildcardTopicForExchange, getStocksForExchange } from "../lib/exchangeUtils";
 import { STOCK_EXCHANGE_MAP, STOCK_EXCHANGES } from "../lib/stockUtils";
 import { getWildcardTopicForCountry, getExchangesForCountry, getCountryCodeForExchange } from "../lib/countryUtils";
 import { topicManager } from "../lib/topicSubscriptionManager";
 import { areStockSelectionsEqual } from "../utils/stockUtils";
-import { PanelLeftClose, PanelRightClose, Cable, Table, LineChart } from "lucide-react"; // Import icons
+import { PanelLeftClose, PanelRightClose, Cable, Table, LineChart, Activity } from "lucide-react"; // Import icons
 import { Button } from "@/components/ui/button"; // Import Button
 import { TopicExplorerModal } from "./TopicExplorerModal"; // Import the new modal
 import MarketOverviewPanel from "./MarketOverviewPanel"; // Import the new MarketOverviewPanel
+import { unwrapAgentPayload } from "@/lib/agentPayload";
+import ResearchPanel from "./ResearchPanel";
+import { useGeneratorState } from "../contexts/TrafficGeneratorContext";
+import { DEFAULT_MARKET_DATA_CONFIG, DEFAULT_TWITTER_CONFIG } from "../types/generatorTypes";
+
+/**
+ * How long to wait for the research agent before showing a timeout. Generous
+ * because the agent makes a real LLM call; the entrypoint's own ack timeout is
+ * 180s (see solace-agent-mesh/entrypoints/market-events.yaml).
+ */
+const RESEARCH_TIMEOUT_MS = 90_000;
 
 import dashboardIcon from '@/assets/market-pulse-logo.png';
 import solaceLogo from '@/assets/solace-text-logo.svg';
@@ -45,6 +61,13 @@ export default function Dashboard() {
   const [isConfigPanelHidden, setIsConfigPanelHidden] = useState<boolean>(false);
   const [isTopicExplorerOpen, setIsTopicExplorerOpen] = useState<boolean>(false); // State for Topic Explorer Modal
   const [currentFrontendConnection, setCurrentFrontendConnection] = useState<SolaceConnection | null>(null);
+
+  // Click-to-research: which symbol's panel is open, and the briefing state per
+  // symbol. Requests go out on research/request/{symbol} and replies arrive on
+  // research/response/{symbol} - all over the same broker as the market data.
+  const [researchSymbol, setResearchSymbol] = useState<string | null>(null);
+  const [researchBySymbol, setResearchBySymbol] = useState<Record<string, ResearchState>>({});
+  const researchTimeoutsRef = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
   
   // Keep a local copy of the stock data that we can update (now directly from Solace or API)
   const [liveStockData, setLiveStockData] = useState<StockDataWithMetadata[]>([]); // MOVED UP - RENAMED from wsStockData
@@ -186,8 +209,9 @@ export default function Dashboard() {
     disconnect,
     subscribe,
     unsubscribe,
-    solaceLastMessage: incomingSolaceMessage, 
-    error: solaceConnectionHookError 
+    publish,
+    solaceLastMessage: incomingSolaceMessage,
+    error: solaceConnectionHookError
   } = useSolaceConnection();
   
   // Get detailed connection status for all Solace services
@@ -206,6 +230,16 @@ export default function Dashboard() {
     marketDataFeedOptionsUpdating, // Destructure new loading state
     twitterFeedOptionsUpdating // Destructure new loading state
   } = useSolaceConnectionStatus();
+
+  // The StatusBar dots reflect the browser-native Traffic Generators (the
+  // actual Start/Stop buttons in the sidebar), not publisherStatus/twitterStatus
+  // above - those come from polling a legacy backend endpoint that the
+  // generators never call, so they stayed permanently "inactive" regardless
+  // of whether a generator was really running.
+  const marketDataGeneratorState = useGeneratorState(DEFAULT_MARKET_DATA_CONFIG.id);
+  const twitterGeneratorState = useGeneratorState(DEFAULT_TWITTER_CONFIG.id);
+  const marketDataFeedActive = marketDataGeneratorState.status === 'running';
+  const twitterFeedActive = twitterGeneratorState.status === 'running';
 
   const [allMarketStocks, setAllMarketStocks] = useState<StockDataWithMetadata[]>([]); // New state for all stocks
 
@@ -1012,6 +1046,19 @@ export default function Dashboard() {
             console.warn(`[SOLACE_TRACE_DASH] Payload for topic ${topicName} is not valid JSON. Error:`, e);
       return;
     }
+        // Agent Mesh replies can arrive as a JSON string wrapping a ```json
+        // fenced object instead of a bare object (see lib/agentPayload.ts).
+        // Normalize here so every branch below sees a plain object.
+        if (typeof parsedPayload === 'string') {
+            const unwrapped = unwrapAgentPayload(parsedPayload);
+            if (unwrapped) {
+                console.log(`[SOLACE_TRACE_DASH] Unwrapped agent payload from string form for ${topicName}.`);
+                parsedPayload = unwrapped;
+            } else {
+                console.warn(`[SOLACE_TRACE_DASH] Payload for ${topicName} was a string with no recoverable JSON object.`);
+                return;
+            }
+        }
     }
     
     let messageType = parsedPayload?.type || parsedPayload?.Signal || parsedPayload?.action;
@@ -1045,6 +1092,10 @@ export default function Dashboard() {
       return;
     } else if (messageType === 'twitter' || messageType === 'twitter-feed' || topicName.startsWith('twitter/')) {
       console.log(`[SOLACE_TRACE_DASH] Skipping direct Twitter feed message from Solace topic ${topicName}. Type was ${messageType}`);
+      return;
+    } else if (topicName.startsWith('research/')) {
+      // Handled by the dedicated research effect below; must not be merged into
+      // liveStockData (it would spawn phantom rows keyed off the briefing).
       return;
     }
     // If messageType is still not set by topic, it might be an unhandled case or rely purely on payload type
@@ -1173,9 +1224,10 @@ export default function Dashboard() {
             
             if (actualSignalFromContent) { 
                 stockToUpdate.tradingSignal = {
-                    signal: String(actualSignalFromContent), 
-                    confidence: typeof confidenceValue === 'number' ? confidenceValue : 0.75, 
-                    timestamp: signalTimestamp
+                    signal: String(actualSignalFromContent),
+                    confidence: typeof confidenceValue === 'number' ? confidenceValue : 0.75,
+                    timestamp: signalTimestamp,
+                    reasoning: typeof signalPayload.reasoning === 'string' ? signalPayload.reasoning : undefined
                 };
                 console.log(`[SOLACE_TRACE_DASH] Updated tradingSignal for ${messageSymbol}:`, stockToUpdate.tradingSignal);
                     } else {
@@ -1258,7 +1310,174 @@ export default function Dashboard() {
       return finalUpdatedData;
     });
   }, [incomingSolaceMessage, selectedStocks, getExchangeForStock, getCountryCodeForExchange]);
-  
+
+  // ---------------------------------------------------------------------------
+  // Click-to-research: handle replies from the Agent Mesh research agent.
+  //
+  // Kept as its own effect (rather than another branch in the big handler above)
+  // because these messages are not stock-row updates - they populate a panel.
+  // ---------------------------------------------------------------------------
+  useEffect(() => {
+    if (!incomingSolaceMessage) return;
+
+    const destination = incomingSolaceMessage.getDestination();
+    if (!destination) return;
+    const topicName = destination.getName();
+
+    const isResponse = topicName.startsWith(RESEARCH_RESPONSE_TOPIC_PREFIX);
+    const isError = topicName.startsWith(RESEARCH_ERROR_TOPIC_PREFIX);
+    if (!isResponse && !isError) return;
+
+    // Trust the topic for the symbol, not the payload: the topic is built by the
+    // entrypoint from the request we sent, whereas the body is LLM output and
+    // has been observed renaming fields (e.g. "ticker" instead of "symbol").
+    const prefix = isResponse ? RESEARCH_RESPONSE_TOPIC_PREFIX : RESEARCH_ERROR_TOPIC_PREFIX;
+    const symbol = topicName.slice(prefix.length).split('/')[0];
+    if (!symbol) return;
+
+    const clearPendingTimeout = () => {
+      const pending = researchTimeoutsRef.current[symbol];
+      if (pending) {
+        clearTimeout(pending);
+        delete researchTimeoutsRef.current[symbol];
+      }
+    };
+
+    const rawBody = incomingSolaceMessage.getBinaryAttachment() as string | null;
+    let payload: any = null;
+    if (rawBody) {
+      try {
+        payload = JSON.parse(rawBody);
+      } catch {
+        payload = rawBody;
+      }
+    }
+    // Agent replies frequently arrive as a JSON string wrapping a ```json fence.
+    const briefingObject = unwrapAgentPayload(payload);
+
+    clearPendingTimeout();
+
+    if (isError) {
+      const message =
+        briefingObject?.message ||
+        briefingObject?.error ||
+        (typeof payload === 'string' ? payload : 'The research agent reported an error.');
+      console.warn(`[RESEARCH] Error for ${symbol}:`, message);
+      setResearchBySymbol(prev => ({
+        ...prev,
+        [symbol]: { status: 'error', message: String(message), receivedAt: Date.now() },
+      }));
+      return;
+    }
+
+    if (!briefingObject) {
+      setResearchBySymbol(prev => ({
+        ...prev,
+        [symbol]: {
+          status: 'error',
+          message: 'The research agent returned a response that could not be parsed.',
+          receivedAt: Date.now(),
+        },
+      }));
+      return;
+    }
+
+    console.log(`[RESEARCH] Briefing received for ${symbol}`);
+    setResearchBySymbol(prev => ({
+      ...prev,
+      [symbol]: {
+        status: 'loaded',
+        // Force the topic-derived symbol so the panel always matches the row
+        // that was clicked, whatever the model called the field.
+        briefing: { ...(briefingObject as any), symbol },
+        receivedAt: Date.now(),
+      },
+    }));
+  }, [incomingSolaceMessage]);
+
+  // Clear any outstanding research timers on unmount.
+  useEffect(() => {
+    return () => {
+      Object.values(researchTimeoutsRef.current).forEach(clearTimeout);
+      researchTimeoutsRef.current = {};
+    };
+  }, []);
+
+  /**
+   * Publishes a research request for `symbol`, seeded with the live context the
+   * dashboard already holds, and opens the panel in its loading state.
+   */
+  const handleResearchRequest = useCallback(async (symbol: string) => {
+    setResearchSymbol(symbol);
+
+    if (!connected) {
+      setResearchBySymbol(prev => ({
+        ...prev,
+        [symbol]: {
+          status: 'error',
+          message: 'Not connected to Solace. Connect in the Solace Connection panel first.',
+          receivedAt: Date.now(),
+        },
+      }));
+      return;
+    }
+
+    const stock = liveStockData.find(s => s.symbol === symbol);
+    const request: ResearchRequest = {
+      symbol,
+      companyName: stock?.companyName,
+      currentPrice: stock?.currentPrice ?? null,
+      percentChange: stock?.percentChange ?? null,
+      latestTweet: stock?.lastTweet?.content ?? null,
+      currentSignal: stock?.tradingSignal?.signal ?? null,
+      requestedAt: new Date().toISOString(),
+    };
+
+    setResearchBySymbol(prev => ({
+      ...prev,
+      [symbol]: { status: 'loading', requestedAt: Date.now() },
+    }));
+
+    // The agent has to call an LLM, so give up eventually rather than spinning
+    // forever if the reply never lands.
+    const existingTimeout = researchTimeoutsRef.current[symbol];
+    if (existingTimeout) clearTimeout(existingTimeout);
+    researchTimeoutsRef.current[symbol] = setTimeout(() => {
+      delete researchTimeoutsRef.current[symbol];
+      setResearchBySymbol(prev => {
+        const current = prev[symbol];
+        if (!current || current.status !== 'loading') return prev;
+        return {
+          ...prev,
+          [symbol]: {
+            status: 'error',
+            message: 'Timed out waiting for the research agent. Is the agent-mesh service running?',
+            receivedAt: Date.now(),
+          },
+        };
+      });
+    }, RESEARCH_TIMEOUT_MS);
+
+    try {
+      await publish(`${RESEARCH_REQUEST_TOPIC_PREFIX}${symbol}`, request);
+      console.log(`[RESEARCH] Requested briefing for ${symbol}`);
+    } catch (err) {
+      const pending = researchTimeoutsRef.current[symbol];
+      if (pending) {
+        clearTimeout(pending);
+        delete researchTimeoutsRef.current[symbol];
+      }
+      setResearchBySymbol(prev => ({
+        ...prev,
+        [symbol]: {
+          status: 'error',
+          message: err instanceof Error ? err.message : 'Failed to publish the research request.',
+          receivedAt: Date.now(),
+        },
+      }));
+    }
+  }, [connected, liveStockData, publish]);
+
   // Helper function to subscribe to stock with exchange info (will use Solace subscribe)
   const subscribeToStock = (symbol: string, exchange: string) => {
     const countryCode = getCountryCodeForExchange(exchange);
@@ -1425,7 +1644,10 @@ export default function Dashboard() {
     // These are topics this frontend client should subscribe to on connect
     // e.g., global status or notifications, if any.
     // For market data and signals, those are dynamic based on user selection.
-    return ['connection/status', 'signal/*']; // ADDED 'signal/*' as a default subscription
+    // 'research/>' carries the market-research agent's replies (and errors) for
+    // the click-to-research panel; they are handled by their own effect rather
+    // than the liveStockData merge below.
+    return ['connection/status', 'signal/*', 'research/>']; // ADDED 'signal/*' as a default subscription
   }, []);
   
   // NEW/REVISED useEffect for Solace Subscription Management (placeholder, full logic next)
@@ -2102,14 +2324,41 @@ export default function Dashboard() {
           >
             <img src={topicExplorerIcon} alt="Topic Explorer" className="h-5 w-5" /> {/* Use img tag for the icon */}
           </Button>
+          {/* SAM Activities Button - deep-links to the Agent Mesh UI's live task
+              monitor, so a demo can jump straight to proof an agent ran, instead
+              of just trusting the Signal/Research panel. Port matches the
+              agent-mesh service mapping in docker-compose.yaml / the README. */}
+          <a
+            href="http://localhost:47801/#/activities"
+            target="_blank"
+            rel="noopener noreferrer"
+            title="View agent activity in Solace Agent Mesh"
+          >
+            <Button
+              variant="outline"
+              size="icon"
+              className="bg-transparent hover:bg-gray-100/20 text-gray-100 hover:text-white border-gray-100/50 hover:border-white p-2"
+            >
+              <Activity className="h-5 w-5" />
+            </Button>
+          </a>
         </div>
       </div>
 
       {/* Topic Explorer Modal */}
-      <TopicExplorerModal 
-        isOpen={isTopicExplorerOpen} 
-        onClose={toggleTopicExplorer} 
+      <TopicExplorerModal
+        isOpen={isTopicExplorerOpen}
+        onClose={toggleTopicExplorer}
         connectionDetails={currentFrontendConnection}
+      />
+
+      {/* AI research briefing, requested by clicking a row's research button and
+          answered by the Agent Mesh research agent over Solace. */}
+      <ResearchPanel
+        symbol={researchSymbol}
+        state={researchSymbol ? researchBySymbol[researchSymbol] : undefined}
+        onClose={() => setResearchSymbol(null)}
+        onRetry={handleResearchRequest}
       />
 
       <div className="flex flex-1 min-h-0"> {/* Added min-h-0 to ensure child flex containers can scroll */}
@@ -2169,9 +2418,9 @@ export default function Dashboard() {
           {/* Filters and Data Table container (ensure it starts below the button or provide padding) */}
           <div className="flex flex-1 overflow-hidden pt-12"> {/* pt-12 to make space for the button */}
             <div className="flex-1 flex flex-col overflow-hidden p-4">
-        <StatusBar 
-          marketDataActive={publisherStatus?.feedActive || false}
-          twitterFeedActive={twitterStatus?.feedActive || false}
+        <StatusBar
+          marketDataActive={marketDataFeedActive}
+          twitterFeedActive={twitterFeedActive}
                   signalDataActive={false} // TODO: Determine how to show signal activity with direct Solace
           lastUpdated={lastUpdated}
                   solaceConnected={connected} // Ensure this is solaceConnected
@@ -2219,6 +2468,8 @@ export default function Dashboard() {
               selectedStocks={selectedStocks || []}
               onForceTweet={handleForceTweet}
               onForceSignal={handleForceSignal}
+              onResearchClick={handleResearchRequest}
+              researchBySymbol={researchBySymbol}
               selectedExchanges={selectedExchanges}
               selectedCountries={selectedCountries}
             />

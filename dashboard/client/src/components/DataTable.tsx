@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from "react";
-import { StockDataWithMetadata } from "@shared/schema";
+import { StockDataWithMetadata, ResearchState } from "@shared/schema";
 import { STOCK_EXCHANGE_MAP } from "../lib/stockUtils";
 import { getCountryCodeForExchange } from "../lib/countryUtils";
 import { Button } from "@/components/ui/button";
@@ -103,6 +103,10 @@ interface DataTableProps {
   onForceSignal?: (symbol: string) => Promise<void>;
   selectedExchanges?: string[]; // Add prop for selected exchanges with wildcards
   selectedCountries?: string[]; // Add prop for selected countries with wildcards
+  /** Ask the Agent Mesh research agent about this symbol. */
+  onResearchClick?: (symbol: string) => void;
+  /** Per-symbol research state, so a row can show its request in flight. */
+  researchBySymbol?: Record<string, ResearchState>;
 }
 
 export default function DataTable({ 
@@ -114,6 +118,8 @@ export default function DataTable({
   selectedStocks,
   onForceTweet,
   onForceSignal,
+  onResearchClick,
+  researchBySymbol = {},
   selectedExchanges = [], // Default to empty array if not provided
   selectedCountries = [] // Default to empty array if not provided
 }: DataTableProps) {
@@ -216,11 +222,12 @@ export default function DataTable({
                   <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider w-24">% Change</th>
                   <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider w-96">Latest Tweet</th>
                   <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider w-24">Signal</th>
+                  <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider w-28">Research</th>
                 </tr>
               </thead>
               <tbody className="bg-white dark:bg-gray-900 divide-y divide-gray-200 dark:divide-gray-800">
                 <tr>
-                  <td colSpan={7} className="px-6 py-12">
+                  <td colSpan={8} className="px-6 py-12">
                     <div className="flex flex-col justify-center items-center">
                       <div className="relative w-16 h-16">
                         <div className="absolute top-0 left-0 w-full h-full rounded-full border-4 border-t-primary border-r-transparent border-b-primary border-l-transparent animate-spin"></div>
@@ -257,11 +264,12 @@ export default function DataTable({
                   <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider w-24">% Change</th>
                   <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider w-96">Latest Tweet</th>
                   <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider w-24">Signal</th>
+                  <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider w-28">Research</th>
                 </tr>
               </thead>
               <tbody className="bg-white dark:bg-gray-900 divide-y divide-gray-200 dark:divide-gray-800">
                 <tr>
-                  <td colSpan={7} className="px-6 py-12">
+                  <td colSpan={8} className="px-6 py-12">
                     <div className="text-center">
                       <div className="bg-gradient-to-r from-red-500 to-rose-600 inline-block p-4 rounded-full text-white">
                         <svg xmlns="http://www.w3.org/2000/svg" className="mx-auto h-12 w-12" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -300,11 +308,12 @@ export default function DataTable({
                   <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider w-24">% Change</th>
                   <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider w-96">Latest Tweet</th>
                   <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider w-24">Signal</th>
+                  <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider w-28">Research</th>
                 </tr>
               </thead>
               <tbody className="bg-white dark:bg-gray-900 divide-y divide-gray-200 dark:divide-gray-800">
                 <tr>
-                  <td colSpan={7} className="px-6 py-12 text-center bg-card text-card-foreground">
+                  <td colSpan={8} className="px-6 py-12 text-center bg-card text-card-foreground">
                     <div className="flex flex-col items-center justify-center text-center">
                       <svg className="mx-auto h-12 w-12 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
                         <path vectorEffect="non-scaling-stroke" strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 13h6m-3-3v6m-9 1V7a2 2 0 012-2h6l2 2h6a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2z" />
@@ -342,6 +351,7 @@ export default function DataTable({
                 <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider w-24">% Change</th>
                 <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider w-96">Latest Tweet</th>
                 <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider w-24">Signal</th>
+                  <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider w-28">Research</th>
               </tr>
             </thead>
             <tbody className="bg-white dark:bg-gray-900 divide-y divide-gray-200 dark:divide-gray-800">
@@ -361,13 +371,15 @@ export default function DataTable({
                     getSignalClass={getSignalClass}
                     getCountryNameForStock={getCountryNameForStock}
                     extractExchangeFromTopic={extractExchangeFromTopic}
+                    onResearchClick={onResearchClick}
+                    researchStatus={researchBySymbol[stock.symbol]?.status}
                   />
                 );
               })}
               
               {data.length === 0 && (
                 <tr>
-                  <td colSpan={7} className="px-6 py-12">
+                  <td colSpan={8} className="px-6 py-12">
                     <div className="text-center text-gray-500 dark:text-gray-400">
                       No data available. Select stocks or check connection.
                     </div>
