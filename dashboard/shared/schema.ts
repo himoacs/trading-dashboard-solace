@@ -241,28 +241,6 @@ export type ResearchState =
   | { status: 'loaded'; briefing: ResearchBriefing; receivedAt: number }
   | { status: 'error'; message: string; receivedAt: number };
 
-// ---------------------------------------------------------------------------
-// Agent Mesh chat (dashboard chat widget -> backend proxy -> Agent Mesh)
-//
-// Unlike research/signals, chat does NOT go over the broker: it uses Agent
-// Mesh's own session API through the dashboard's backend, so the conversation
-// is a real Agent Mesh session (visible in its Web UI) and multi-turn memory is
-// the platform's rather than history we re-send each turn. The browser cannot
-// call that API directly - it returns no CORS headers for this origin - hence
-// the same-origin proxy at /api/chat/*. See
-// dashboard/server/services/samChatService.ts.
-// ---------------------------------------------------------------------------
-
-/** One turn in a chat conversation. */
-export type ChatTurn = {
-  role: 'user' | 'assistant';
-  content: string;
-  /** ISO-8601. Server-supplied for replies; client-supplied for local echoes. */
-  timestamp: string;
-};
-
-export type ChatStatus = 'idle' | 'starting' | 'sending' | 'error';
-
 // Solace client connection schema
 export const solaceConnectionSchema = z.object({
   brokerUrl: z.string().min(1, "Broker URL is required"),

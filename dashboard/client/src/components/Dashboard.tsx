@@ -30,7 +30,7 @@ import { topicManager } from "../lib/topicSubscriptionManager";
 import { areStockSelectionsEqual } from "../utils/stockUtils";
 import { PanelLeftClose, PanelRightClose, Cable, Table, LineChart, Activity } from "lucide-react"; // Import icons
 import { Button } from "@/components/ui/button"; // Import Button
-import { TopicExplorerModal } from "./TopicExplorerModal"; // Import the new modal
+import { TopicExplorerPanel } from "./topic-explorer/TopicExplorerPanel";
 import MarketOverviewPanel from "./MarketOverviewPanel"; // Import the new MarketOverviewPanel
 import { unwrapAgentPayload } from "@/lib/agentPayload";
 import ResearchPanel from "./ResearchPanel";
@@ -1090,9 +1090,18 @@ export default function Dashboard() {
     } else if (topicName.startsWith('#SYS.') || topicName.startsWith('$SYS.') || topicName.startsWith('SOLACE/CLIENT/')) {
       console.log('[SOLACE_TRACE_DASH] Skipping system-like or client event message from Solace:', topicName, messageType);
       return;
-    } else if (messageType === 'twitter' || messageType === 'twitter-feed' || topicName.startsWith('twitter/')) {
-      console.log(`[SOLACE_TRACE_DASH] Skipping direct Twitter feed message from Solace topic ${topicName}. Type was ${messageType}`);
-      return;
+    } else if (topicName.startsWith('twitter-feed/')) {
+      // Show the raw tweet immediately, independent of whether the Agent Mesh
+      // ever turns it into a signal/output message (e.g. LLM budget/rate-limit
+      // outages). The Signal column still relies on the signal/* path above.
+      messageType = 'twitter-feed';
+      if (!messageSymbol) {
+        const parts = topicName.split('/');
+        if (parts.length >= 2 && parts[1] && parts[1] !== '>' && parts[1] !== '*') {
+          messageSymbol = parts[1];
+        }
+      }
+      console.log(`[SOLACE_TRACE_DASH] Topic is twitter-feed. Symbol from payload/topic: '${messageSymbol}'`);
     } else if (topicName.startsWith('research/')) {
       // Handled by the dedicated research effect below; must not be merged into
       // liveStockData (it would spawn phantom rows keyed off the briefing).
@@ -1285,7 +1294,21 @@ export default function Dashboard() {
         } else {
           console.warn(`[SOLACE_TRACE_DASH] Market data for ${messageSymbol} is null, not an object, or critical fields missing.`);
         }
-      } 
+      }
+      else if (messageType === 'twitter-feed' && topicName.startsWith('twitter-feed/') && messageSymbol) {
+        // Raw tweet straight from the Traffic Generator, shown as-is with no
+        // dependency on the Agent Mesh / signal/output round trip.
+        const tweetPayload = actualMessageData;
+        if (tweetPayload && typeof tweetPayload === 'object' && typeof tweetPayload.content === 'string') {
+          stockToUpdate.lastTweet = {
+            content: tweetPayload.content,
+            timestamp: tweetPayload.timestamp || messageTimestamp || new Date().toISOString(),
+          };
+          console.log(`[SOLACE_TRACE_DASH] Updated lastTweet for ${messageSymbol} directly from twitter-feed:`, stockToUpdate.lastTweet);
+        } else {
+          console.warn(`[SOLACE_TRACE_DASH] twitter-feed message for ${messageSymbol} missing a 'content' string.`, tweetPayload);
+        }
+      }
       else if (topicName && !topicName.startsWith('connection/status')) {
         console.log(`[SOLACE_TRACE_DASH] No specific processing rule for Type: '${messageType}', Symbol: '${messageSymbol || "N/A"}', Topic: '${topicName}'. Payload:`, actualMessageData);
       }
@@ -1647,7 +1670,10 @@ export default function Dashboard() {
     // 'research/>' carries the market-research agent's replies (and errors) for
     // the click-to-research panel; they are handled by their own effect rather
     // than the liveStockData merge below.
-    return ['connection/status', 'signal/*', 'research/>']; // ADDED 'signal/*' as a default subscription
+    // 'twitter-feed/>' is the raw Traffic Generator tweet stream, subscribed to
+    // directly so the Latest Tweet column can show content without waiting on
+    // the Agent Mesh's signal/output round trip (which depends on LLM calls).
+    return ['connection/status', 'signal/*', 'research/>', 'twitter-feed/>'];
   }, []);
   
   // NEW/REVISED useEffect for Solace Subscription Management (placeholder, full logic next)
@@ -2329,7 +2355,7 @@ export default function Dashboard() {
               of just trusting the Signal/Research panel. Port matches the
               agent-mesh service mapping in docker-compose.yaml / the README. */}
           <a
-            href="http://localhost:47801/#/activities"
+            href="http://localhost:47802/#/activities"
             target="_blank"
             rel="noopener noreferrer"
             title="View agent activity in Solace Agent Mesh"
@@ -2344,13 +2370,6 @@ export default function Dashboard() {
           </a>
         </div>
       </div>
-
-      {/* Topic Explorer Modal */}
-      <TopicExplorerModal
-        isOpen={isTopicExplorerOpen}
-        onClose={toggleTopicExplorer}
-        connectionDetails={currentFrontendConnection}
-      />
 
       {/* AI research briefing, requested by clicking a row's research button and
           answered by the Agent Mesh research agent over Solace. */}
@@ -2488,6 +2507,12 @@ export default function Dashboard() {
             </div>
           </div>
         </div>
+
+          <TopicExplorerPanel
+            isOpen={isTopicExplorerOpen}
+            onClose={toggleTopicExplorer}
+            connectionConfig={currentFrontendConnection}
+          />
           </div>
     </div>
   );

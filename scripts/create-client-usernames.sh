@@ -1,14 +1,12 @@
 #!/bin/sh
-# Provisions two client-username objects on the default VPN so demo/demo and
-# sun/sun exist as real broker identities, not just accepted incidentally
-# because the VPN's authenticationBasicType is currently "none" (which makes
-# literally any username/password pair work). Real objects mean: they show up
-# distinctly in the broker's client-connection monitoring, and if basic auth
-# is ever turned on for this VPN, both keep working with no further changes.
+# Provisions a client-username object on the default VPN so demo/demo exists as
+# a real broker identity, not just accepted incidentally because the VPN's
+# authenticationBasicType is currently "none" (which makes literally any
+# username/password pair work). A real object means: it shows up distinctly in
+# the broker's client-connection monitoring, and if basic auth is ever turned
+# on for this VPN, it keeps working with no further changes.
 #
 #   demo/demo - the dashboard's own frontend Solace Connection panel default
-#   sun/sun   - for external tools (e.g. the Sunburst Topic Explorer) that
-#               need their own connection details, kept distinct from demo
 #
 # A fresh clientUsername inherits the "default" ACL/client profile
 # automatically - no need to set clientProfileName/aclProfileName explicitly
@@ -62,6 +60,5 @@ until curl -sf -u "$SEMP_AUTH" "$SEMP_BASE/config/msgVpns/$VPN" > /dev/null 2>&1
 done
 
 create_client_username "demo" "demo"
-create_client_username "sun" "sun"
 
-echo "Client usernames provisioned."
+echo "Client username provisioned."

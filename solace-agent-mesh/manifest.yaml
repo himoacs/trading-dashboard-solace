@@ -9,7 +9,7 @@ description: >
 # service. `${VAR}` substitution is NOT applied to target.url, so it must be a
 # literal; override it from elsewhere with the CLI flag instead, e.g. running
 # from your host:
-#   sam config apply -m solace-agent-mesh/manifest.yaml --url http://localhost:47801
+#   sam config apply -m solace-agent-mesh/manifest.yaml --url http://localhost:47802
 target:
   url: http://agent-mesh:8800
 
@@ -27,16 +27,10 @@ resources:
   models:
     - general
     - cheap
-  # Read-only SQL access to the market-history database, for the historian agent.
-  # The market-history service is the only writer; this connector authenticates
-  # as a SELECT-only role so SAM cannot write even by accident.
-  connectors:
-    - market-history-connector
   agents:
     - trading-signal-agent
     - market-research-agent
     - verdict-reconciler-agent
-    - market-historian-agent
   workflows:
     - research-briefing-workflow
   entrypoints:

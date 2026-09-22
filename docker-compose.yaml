@@ -3,8 +3,7 @@
 #   broker            Solace PubSub+ Standard - the ONE broker everything shares
 #   agent-mesh        Solace Agent Mesh (Go) runtime, all components embedded
 #   sam-config        one-shot: applies solace-agent-mesh/ declarative config
-#   market-history    records broker traffic into Postgres for historical queries
-#   client-usernames  one-shot: provisions demo/demo and sun/sun on the broker
+#   client-usernames  one-shot: provisions demo/demo on the broker
 #   queue-guardrail   one-shot: caps the tweet_to_signal queue's backlog TTL
 #   dashboard         the React + Express trading dashboard
 #
@@ -66,50 +65,6 @@ services:
       - broker-data:/var/lib/solace
 
   # ---------------------------------------------------------------------------
-  # Postgres: the market-history database. Written by the market-history
-  # service, read by Agent Mesh's market-historian-agent (via its sql/postgres
-  # connector) so the dashboard's chat window can answer questions about past
-  # market data, tweets, and signals.
-  #
-  # Postgres rather than an embedded SQLite file specifically because SAM's SQL
-  # connector has no sqlite subtype - `sam config schema show connector --type
-  # sql` offers only postgres/mysql/mariadb/mssql/oracle. Using SAM's built-in
-  # connector beats hand-rolling a REST shim in front of SQLite.
-  #
-  # db/init/ runs on FIRST START ONLY (fresh volume): 001 creates the tables,
-  # 002 creates the writer/reader roles. To re-run it from scratch:
-  #   docker compose down && docker volume rm trading-dashboard-solace_market-history-db
-  # ---------------------------------------------------------------------------
-  postgres:
-    image: postgres:16-alpine
-    container_name: market-pulse-postgres
-    restart: unless-stopped
-    environment:
-      POSTGRES_DB: "${MARKET_HISTORY_DB:-market_history}"
-      POSTGRES_USER: "${MARKET_HISTORY_ADMIN_USER:-postgres}"
-      POSTGRES_PASSWORD: "${MARKET_HISTORY_ADMIN_PASSWORD:-postgres}"
-      # Consumed by db/init/002-roles.sh to create the two least-privilege
-      # roles. The reader password is also handed to sam-config below, so the
-      # connector resource and the role it authenticates as stay in sync.
-      MARKET_HISTORY_WRITER_PASSWORD: "${MARKET_HISTORY_WRITER_PASSWORD:-history_writer}"
-      MARKET_HISTORY_READER_PASSWORD: "${MARKET_HISTORY_READER_PASSWORD:-history_reader}"
-    ports:
-      # Host-published only for `psql`/inspection from the host during a demo;
-      # every in-stack consumer reaches it as `postgres:5432` over the compose
-      # network. 47432 follows this file's 47xxx convention (5432 -> 47432).
-      - "47432:5432"
-    healthcheck:
-      # Gates market-history's writer connection and sam-config's apply.
-      test: ["CMD-SHELL", "pg_isready -U ${MARKET_HISTORY_ADMIN_USER:-postgres} -d ${MARKET_HISTORY_DB:-market_history}"]
-      interval: 5s
-      timeout: 5s
-      retries: 20
-      start_period: 10s
-    volumes:
-      - market-history-db:/var/lib/postgresql/data
-      - ./db/init:/docker-entrypoint-initdb.d:ro
-
-  # ---------------------------------------------------------------------------
   # Agent Mesh runtime. The image's default command runs every component
   # in-process (entrypoint executor, platform service, secure tool runtime,
   # agent-workflow executor) and serves the Web UI.
@@ -152,7 +107,9 @@ services:
 
       SESSION_SECRET_KEY: "${SAM_SESSION_SECRET:-change-me-for-anything-shared}"
     ports:
-      - "47801:8800"     # Agent Mesh Web UI + platform API
+      # Remapped from the file's usual 47801 - already held on this machine by
+      # an unrelated project's own Agent Mesh container.
+      - "47802:8800"     # Agent Mesh Web UI + platform API
     volumes:
       - sam-data:/tmp/sam-data
     healthcheck:
@@ -188,56 +145,16 @@ services:
       LLM_SERVICE_ENDPOINT: "${LLM_SERVICE_ENDPOINT}"
       LLM_SERVICE_API_KEY: "${LLM_SERVICE_API_KEY}"
       LLM_SERVICE_GENERAL_MODEL_NAME: "${LLM_SERVICE_GENERAL_MODEL_NAME:-openai/gpt-4o}"
-      # Substituted into connectors/market-history-connector.yaml at apply time.
-      # Must match the role password db/init/002-roles.sh created, which is why
-      # both read the same variable.
-      MARKET_HISTORY_DB: "${MARKET_HISTORY_DB:-market_history}"
-      MARKET_HISTORY_READER_PASSWORD: "${MARKET_HISTORY_READER_PASSWORD:-history_reader}"
     volumes:
       - ./solace-agent-mesh:/config:ro
     command: ["config", "apply", "-m", "/config/manifest.yaml", "--no-dotenv"]
 
   # ---------------------------------------------------------------------------
-  # Records live broker traffic (price ticks, tweets, trading signals) into
-  # Postgres, so the dashboard's chat window can ask about what already
-  # happened. A plain, non-AI component on purpose: Agent Mesh only ever READS
-  # this data (as the SELECT-only history_reader role), never writes it -
-  # routing raw ticks through an LLM would be slow, costly, and pointless.
-  #
-  # Write-only: no HTTP API, no published ports. See market-history/src/index.ts
-  # for the documented gap limitation (DIRECT topic subscriptions, not a durable
-  # queue, so a restart or message eliding can leave holes in history).
-  # ---------------------------------------------------------------------------
-  market-history:
-    build:
-      context: ./market-history
-    container_name: market-pulse-market-history
-    depends_on:
-      broker:
-        condition: service_healthy
-      postgres:
-        condition: service_healthy
-    restart: unless-stopped
-    environment:
-      # Same var names every other service in this file uses.
-      SOLACE_BROKER_URL: "tcp://broker:55555"
-      SOLACE_BROKER_VPN: "${SOLACE_BROKER_VPN:-default}"
-      SOLACE_BROKER_USERNAME: "${SOLACE_BROKER_USERNAME:-default}"
-      SOLACE_BROKER_PASSWORD: "${SOLACE_BROKER_PASSWORD:-default}"
-      # Connects as history_writer: INSERT + SELECT only, no UPDATE/DELETE, so
-      # even this service cannot rewrite history (db/init/002-roles.sh).
-      POSTGRES_HOST: postgres
-      POSTGRES_PORT: "5432"
-      POSTGRES_DB: "${MARKET_HISTORY_DB:-market_history}"
-      POSTGRES_USER: history_writer
-      POSTGRES_PASSWORD: "${MARKET_HISTORY_WRITER_PASSWORD:-history_writer}"
-
-  # ---------------------------------------------------------------------------
-  # One-shot: provisions the demo/demo and sun/sun client-username objects on
-  # the default VPN via SEMP (see scripts/create-client-usernames.sh). Only
-  # needs the broker itself - independent of sam-config/agent-mesh, since
-  # those connect as SOLACE_BROKER_USERNAME/PASSWORD (default/default by env
-  # var), a separate identity from these two browser/external-tool logins.
+  # One-shot: provisions the demo/demo client-username object on the default
+  # VPN via SEMP (see scripts/create-client-usernames.sh). Only needs the
+  # broker itself - independent of sam-config/agent-mesh, since those connect
+  # as SOLACE_BROKER_USERNAME/PASSWORD (default/default by env var), a
+  # separate identity from this browser login.
   # ---------------------------------------------------------------------------
   client-usernames:
     image: solace/solace-pubsub-standard:latest
@@ -282,35 +199,20 @@ services:
     depends_on:
       broker:
         condition: service_healthy
-      # The chat proxy calls agent-mesh. Not strictly required to boot (the
-      # rest of the dashboard works without it, and /api/chat/* returns a 502
-      # with a clear message if it's down), but gating avoids a confusing
-      # first-30-seconds failure right after `docker compose up`.
-      agent-mesh:
-        condition: service_healthy
     environment:
       # Backend-side Solace connection (the browser connects separately over
       # ws://localhost:47008 using the Solace Connection panel defaults).
       SOLACE_BROKER_URL: "tcp://broker:55555"
-      # For the chat proxy (/api/chat/*). The browser can't call Agent Mesh
-      # directly - that origin gets no CORS headers - so the backend relays.
-      # See dashboard/server/services/samChatService.ts.
-      SAM_PLATFORM_URL: "http://agent-mesh:8800"
-      # Which agent the chat window talks to. The Orchestrator delegates to
-      # whichever deployed agent fits the question (history, research, signals),
-      # so the chat isn't limited to one topic. Override with a specific agent
-      # name to bypass delegation - it's a per-request parameter, so no
-      # `sam config apply` is needed either way.
-      SAM_CHAT_AGENT: "${SAM_CHAT_AGENT:-Orchestrator}"
       SOLACE_BROKER_VPN: "${SOLACE_BROKER_VPN:-default}"
       SOLACE_BROKER_USERNAME: "${SOLACE_BROKER_USERNAME:-default}"
       SOLACE_BROKER_PASSWORD: "${SOLACE_BROKER_PASSWORD:-default}"
     ports:
-      # Host 47173 -> container 5000. Host 5000 is taken by macOS Control
+      # Host 47174 -> container 5000. Host 5000 is taken by macOS Control
       # Center (AirPlay Receiver), which is why the app is not published there.
-      - "47173:5000"
+      # Remapped from the file's usual 47173 - already held on this machine by
+      # an unrelated project's own dashboard container.
+      - "47174:5000"
 
 volumes:
   broker-data:
   sam-data:
-  market-history-db:
