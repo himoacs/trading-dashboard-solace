@@ -2,10 +2,10 @@ kind: workflow
 name: research-briefing-workflow
 description: >
   Reconciles a fresh equity-research read against the trading signal already
-  published for the stock, deliberates when they disagree, then runs the
-  verdict through a deterministic compliance/actionability gate before
-  publishing. Triggered by the market-events entrypoint's research_request
-  rule (targetWorkflowName) - never invoked directly by a user.
+  published for the stock, then runs the verdict through a deterministic
+  compliance/actionability gate before publishing. Triggered by the
+  market-events entrypoint's research_request rule (targetWorkflowName) -
+  never invoked directly by a user.
 spec:
   appConfig:
     # MUST equal the resource name above AND the entrypoint's
@@ -17,8 +17,8 @@ spec:
     # disassembly-backed explanation.
     display_name: research-briefing-workflow
     description: >
-      Narrative research -> reconcile against the existing signal -> refine
-      on disagreement -> compliance/actionability classification.
+      Narrative research -> reconcile against the existing signal ->
+      deterministic compliance/actionability classification.
     version: "1.0.0"
     fail_fast: true
     default_node_timeout: "60s"

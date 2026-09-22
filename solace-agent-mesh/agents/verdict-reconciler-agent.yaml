@@ -3,8 +3,10 @@ name: verdict-reconciler-agent
 description: >
   Reconciles a fresh equity-research read against the trading signal already
   published for the same stock, and decides whether they agree. Used only
-  inside research-briefing-workflow (as both the reconcile and refine_step
-  nodes) - never triggered directly by an entrypoint.
+  inside research-briefing-workflow - as the reconcile node, and reused
+  (with an overridden instruction and output_schema_override) as each of the
+  four terminal classify_actionability category nodes - never triggered
+  directly by an entrypoint.
 spec:
   modelProvider: ["cheap"]
 
