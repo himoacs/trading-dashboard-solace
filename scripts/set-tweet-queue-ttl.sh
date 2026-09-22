@@ -25,10 +25,18 @@ echo "Waiting for the tweet_to_signal queue to be provisioned..."
 QUEUE_NAME=""
 i=0
 while [ "$i" -lt 30 ]; do
+  # A platform-state reset (e.g. wiping the Agent Mesh data volume) mints a new
+  # gateway UUID for the entrypoint on redeploy, but the broker keeps the OLD
+  # queue around too - it's never deleted, just abandoned. Both then match this
+  # grep. UUIDv7 gateway IDs sort lexicographically by creation time, so
+  # `sort | tail -1` picks the newest (live) one rather than whichever happens
+  # to sort first alphabetically - which silently patched an abandoned queue
+  # instead of the real one, verified live on a broker holding both.
   QUEUE_NAME=$(curl -sf -u "$SEMP_AUTH" \
       "$SEMP_BASE/monitor/msgVpns/$VPN/queues?select=queueName&count=100" \
-    | grep -o '"queueName":"[^"]*tweet_to_signal"' | head -1 \
-    | sed 's/"queueName":"//;s/"$//') || true
+    | grep -o '"queueName":"[^"]*tweet_to_signal"' \
+    | sed 's/"queueName":"//;s/"$//' \
+    | sort | tail -1) || true
   if [ -n "$QUEUE_NAME" ]; then
     break
   fi
