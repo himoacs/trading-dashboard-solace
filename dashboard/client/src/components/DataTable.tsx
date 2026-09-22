@@ -5,6 +5,30 @@ import { getCountryCodeForExchange } from "../lib/countryUtils";
 import { Button } from "@/components/ui/button";
 import HoverTooltip from "./HoverTooltip";
 import { StockDataRow } from "./StockDataRow";
+import { Info } from "lucide-react";
+
+const RESEARCH_HEADER_TOOLTIP =
+  "Sends this stock's live price, latest tweet, and current signal through " +
+  "Solace Agent Mesh's research-briefing-workflow: fresh AI research is " +
+  "reconciled against the existing signal, then classified as Actionable, " +
+  "Advisory, Watch Only, or Blocked.";
+
+function ResearchHeaderLabel() {
+  return (
+    <span className="inline-flex items-center gap-1">
+      Research
+      <HoverTooltip
+        tooltipContent={RESEARCH_HEADER_TOOLTIP}
+        tooltipClassName="max-w-xs whitespace-pre-wrap break-words normal-case tracking-normal font-normal"
+      >
+        <Info
+          className="h-3.5 w-3.5 shrink-0 cursor-help text-gray-400 dark:text-gray-500"
+          aria-label="What does clicking Research do?"
+        />
+      </HoverTooltip>
+    </span>
+  );
+}
 
 // Use STOCK_EXCHANGE_MAP directly to get exchange for stock
 const getExchangeForStock = (symbol: string): string => {
@@ -222,7 +246,7 @@ export default function DataTable({
                   <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider w-24">% Change</th>
                   <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider w-96">Latest Tweet</th>
                   <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider w-24">Signal</th>
-                  <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider w-28">Research</th>
+                  <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider w-28"><ResearchHeaderLabel /></th>
                 </tr>
               </thead>
               <tbody className="bg-white dark:bg-gray-900 divide-y divide-gray-200 dark:divide-gray-800">
@@ -264,7 +288,7 @@ export default function DataTable({
                   <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider w-24">% Change</th>
                   <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider w-96">Latest Tweet</th>
                   <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider w-24">Signal</th>
-                  <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider w-28">Research</th>
+                  <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider w-28"><ResearchHeaderLabel /></th>
                 </tr>
               </thead>
               <tbody className="bg-white dark:bg-gray-900 divide-y divide-gray-200 dark:divide-gray-800">
@@ -308,7 +332,7 @@ export default function DataTable({
                   <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider w-24">% Change</th>
                   <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider w-96">Latest Tweet</th>
                   <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider w-24">Signal</th>
-                  <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider w-28">Research</th>
+                  <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider w-28"><ResearchHeaderLabel /></th>
                 </tr>
               </thead>
               <tbody className="bg-white dark:bg-gray-900 divide-y divide-gray-200 dark:divide-gray-800">
@@ -351,7 +375,7 @@ export default function DataTable({
                 <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider w-24">% Change</th>
                 <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider w-96">Latest Tweet</th>
                 <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider w-24">Signal</th>
-                  <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider w-28">Research</th>
+                  <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider w-28"><ResearchHeaderLabel /></th>
               </tr>
             </thead>
             <tbody className="bg-white dark:bg-gray-900 divide-y divide-gray-200 dark:divide-gray-800">
