@@ -164,8 +164,8 @@ function GeneratorCard({
             value={[state.config.messageRate]}
             onValueChange={handleRateChange}
             min={isMarketData ? 1 : 1}
-            max={isMarketData ? 500 : 30}
-            step={1}
+            max={isMarketData ? 5000 : 30}
+            step={isMarketData ? 10 : 1}
           />
         </div>
         

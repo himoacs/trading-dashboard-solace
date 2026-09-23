@@ -163,6 +163,14 @@ function initializeStocks(): StockInfo[] {
     });
 }
 
+// The tweet_to_signal queue only expires messages that carry their own TTL (see
+// scripts/set-tweet-queue-ttl.sh / TWEET_QUEUE_TTL_SECONDS), so the publisher has
+// to set one or a backed-up agent-mesh just accumulates an unbounded pile of
+// stale tweets. Kept well below TWEET_QUEUE_TTL_SECONDS's 300s default so a
+// tweet is dropped long before it's stale enough to produce a misleading
+// signal, not just before the queue's own outer bound.
+const TWEET_TTL_MS = 30_000;
+
 // Tweet templates for various sentiments
 const TWEET_TEMPLATES = {
   bullish: [
@@ -491,13 +499,19 @@ export function TrafficGeneratorProvider({ children }: { children: ReactNode }) 
             payload = JSON.stringify(tweet);
             topic = config.topicPattern.replace('{symbol}', stock.symbol);
           }
-          
+
           message.setDestination(solace.SolclientFactory.createTopicDestination(topic));
-          
+
           // Use string directly - solclientjs handles encoding for ASCII/Latin-1 compatible strings
           // We've removed emojis from templates to ensure compatibility
           message.setBinaryAttachment(payload);
-          
+
+          // Tweets expire on their own so a stalled/rate-limited Agent Mesh
+          // can't build an unbounded backlog; market data has no such queue.
+          if (config.type !== 'market-data') {
+            message.setTimeToLive(TWEET_TTL_MS);
+          }
+
           // Set delivery mode
           if (config.deliveryMode === 'PERSISTENT') {
             message.setDeliveryMode(solace.MessageDeliveryModeType.PERSISTENT);
@@ -541,9 +555,12 @@ export function TrafficGeneratorProvider({ children }: { children: ReactNode }) 
         notifySubscribers(generatorId);
         
         // Calculate publishing strategy based on rate
-        // Use batch publishing for high rates to overcome browser setInterval limitations
-        const MIN_INTERVAL_MS = 50; // Minimum interval for reliable timing (20 ticks/second)
-        
+        // Use batch publishing for high rates to overcome browser setInterval limitations.
+        // 20ms (50 ticks/second) keeps the per-tick batch small even at the 5000 msg/s
+        // ceiling (250 msgs/tick at 50ms vs. 100 msgs/tick at 20ms), so a burst is less
+        // likely to make the tick itself run long and skew the browser's own timers.
+        const MIN_INTERVAL_MS = 20;
+
         let intervalMs: number;
         let messagesPerTick: number;
         let rateDescription: string;
@@ -645,7 +662,7 @@ export function TrafficGeneratorProvider({ children }: { children: ReactNode }) 
         clearInterval(generator.publishInterval);
         
         // Calculate publishing strategy based on rate (same logic as initial start)
-        const MIN_INTERVAL_MS = 50;
+        const MIN_INTERVAL_MS = 20;
         let intervalMs: number;
         let messagesPerTick: number;
         let rateDescription: string;
@@ -718,10 +735,16 @@ export function TrafficGeneratorProvider({ children }: { children: ReactNode }) 
             }
             
             message.setDestination(solace.SolclientFactory.createTopicDestination(topic));
-            
+
             // Use string directly - solclientjs handles encoding for ASCII/Latin-1 compatible strings
             message.setBinaryAttachment(payload);
-            
+
+            // Tweets expire on their own so a stalled/rate-limited Agent Mesh
+            // can't build an unbounded backlog; market data has no such queue.
+            if (newConfig.type !== 'market-data') {
+              message.setTimeToLive(TWEET_TTL_MS);
+            }
+
             if (newConfig.deliveryMode === 'PERSISTENT') {
               message.setDeliveryMode(solace.MessageDeliveryModeType.PERSISTENT);
             } else {
